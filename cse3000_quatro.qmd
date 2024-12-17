@@ -90,11 +90,15 @@ logist_taal2010_nsec <- function(d,a,b,c) {
 }
 ```
 
-I define some useful operators in case it's useful
+I define some operators in case it's useful
 
 ```{r}
 `%sp%` <- function(df, spk) {
   filter(df, speaker == spk)
+}
+
+`%snr%` <- function(df, snr) {
+  filter(df, snr == {{snr}})
 }
 ```
 
@@ -162,6 +166,9 @@ p_siibgaus_siib + geom_point() + labs(x="SIIB Score (Gaussian)", y="SIIB Score",
 kendall_stoi_miknn <- cor(noq(filtered_data)$stoi_score, noq(filtered_data)$MIKNNScore2x, method = "kendall")
 kendall_stoi_miknn
 
+kendall_stoi_siib <- cor(noq(filtered_data)$stoi_score, noq(filtered_data)$siib_score, method = "kendall")
+kendall_stoi_siib
+
 kendall_stoi_siibgauss <- cor(noq(filtered_data)$stoi_score, noq(filtered_data)$siib_score_gaussian, method = "kendall")
 kendall_stoi_siibgauss
 ```
@@ -174,8 +181,87 @@ summary(fit)
 ```
 
 ```{r}
-p <- prep_plot(filtered_data %sp% 51, stoi_score, sim_wcr)
+f53 <- filtered_data %sp% 53
+p <- prep_plot(filtered_data, stoi_score, sim_wcr)
 p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data, stoi_score, sim_editdist)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data |> noq(), siib_score, sim_wcr)
+p + geom_point() + labs(x="SIIB Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data |> noq(), siib_score_gaussian, sim_wcr)
+p + geom_point() + labs(x="SIIB Score (Gaussian)", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data |> noq(), MIKNNScore2x, sim_wcr)
+p + geom_point() + labs(x="MIKNN Score", y="Subjective Score (WCR)", color="SNR")
+
+#fit <- nls(sim_editdist ~ fun(stoi_score, a, b), start=list(a=-3,b=2), data=data)
+#preds <- predict(fit)
+#pearson_cor <- cor(data$stoi_score, data$sim_editdist, method = "pearson")
+```
+
+```{r}
+
+p <- prep_plot(f53, stoi_score, sim_wcr)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(f53, stoi_score, sim_editdist)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(f53 |> noq(), siib_score, sim_wcr)
+p + geom_point() + labs(x="SIIB Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(f53 |> noq(), siib_score_gaussian, sim_wcr)
+p + geom_point() + labs(x="SIIB Score (Gaussian)", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(f53 |> noq(), MIKNNScore2x, sim_wcr)
+p + geom_point() + labs(x="MIKNN Score", y="Subjective Score (WCR)", color="SNR")
+
+#fit <- nls(sim_editdist ~ fun(stoi_score, a, b), start=list(a=-3,b=2), data=data)
+#preds <- predict(fit)
+#pearson_cor <- cor(data$stoi_score, data$sim_editdist, method = "pearson")
+```
+
+Plots per SNR
+
+```{r}
+p <- prep_plot(filtered_data |> filter(snr=="n4"), stoi_score, sim_wcr)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data |> filter(snr=="n2"), stoi_score, sim_wcr)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data |> filter(snr=="0"), stoi_score, sim_wcr)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+
+p <- prep_plot(filtered_data |> filter(snr=="2"), stoi_score, sim_wcr)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data |> filter(snr=="4"), stoi_score, sim_wcr)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data |> filter(snr=="6"), stoi_score, sim_wcr)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data |> filter(snr=="8"), stoi_score, sim_wcr)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data |> filter(snr=="n2"), stoi_score, sim_wcr)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+p <- prep_plot(filtered_data %snr% "n2", stoi_score, sim_editdist)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data %snr% "n2" |> noq(), siib_score, sim_wcr)
+p + geom_point() + labs(x="SIIB Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data %snr% "n2" |> noq(), siib_score_gaussian, sim_wcr)
+p + geom_point() + labs(x="SIIB Score (Gaussian)", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(filtered_data %snr% "n2" |> noq(), MIKNNScore2x, sim_wcr)
+p + geom_point() + labs(x="MIKNN Score", y="Subjective Score (WCR)", color="SNR")
 
 #fit <- nls(sim_editdist ~ fun(stoi_score, a, b), start=list(a=-3,b=2), data=data)
 #preds <- predict(fit)
