@@ -7,13 +7,18 @@ title: "cse3000_quatro"
 Install packages first
 
 ```{r}
-install.packages(c("tidyverse", "stringdist", "ggpmisc"))
-```
+if (!require("tidyverse")) {
+  install.packages("tidyverse")
+}
 
-```{r}
-library("tidyverse")
-library("stringdist")
-library("ggpmisc")
+if (!require("stringdist")) {
+  install.packages("stringdist")
+}
+
+if (!require("ggpmisc")) {
+  install.packages("ggpmisc")
+}
+
 ```
 
 Helpful variables
@@ -169,7 +174,7 @@ summary(fit)
 ```
 
 ```{r}
-p <- prep_plot(filtered_data %sp% 51)
+p <- prep_plot(filtered_data %sp% 51, stoi_score, sim_wcr)
 p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
 
 #fit <- nls(sim_editdist ~ fun(stoi_score, a, b), start=list(a=-3,b=2), data=data)
