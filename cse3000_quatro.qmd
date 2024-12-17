@@ -1,0 +1,170 @@
+---
+title: "cse3000_quatro"
+---
+
+## Quarto
+
+Install packages first
+
+```{r}
+install.packages(c("tidyverse", "stringdist", "ggpmisc"))
+```
+
+```{r}
+library("tidyverse")
+library("stringdist")
+library("ggpmisc")
+```
+
+Helpful variables
+
+```{r}
+  snr_order <- c("n4", "n2", "0", "2", "4", "6", "8", "Q")
+
+```
+
+I first merge all data that I have, and create one DataFrame
+
+```{r}
+prep <- function(metadata_csv_loc, ...) {
+  scores = list(...)
+  stoi_scores_loc <- scores[["stoi_scores_loc"]]
+  miknn_scores_loc <- scores[["miknn_scores_loc"]]
+  siib_scores_loc <- scores[["siib_scores_loc"]]
+  siib_scores_gaussian_loc <- scores[["siib_scores_gaussian_loc"]]
+  l1_csv <- read.csv(metadata_csv_loc, sep = ";")
+  l1_data <- as_tibble(l1_csv)
+  l1_stoi_scores <- as_tibble(read.csv(stoi_scores_loc, sep=","))
+  l1_miknn_scores <- miknn_scores_loc |> read.csv(sep=",") |> as_tibble()
+  l1_siib_scores <- siib_scores_loc |> read.csv(sep=",") |> as_tibble()
+  l1_siib_scores_gaussian <- siib_scores_gaussian_loc |> read.csv(sep=",") |> as_tibble()
+  all_data <- l1_data |> 
+    merge(l1_stoi_scores, by.x = c("audio", "snr"), by.y=c("filename", "snr"), all.x=TRUE) |>
+     merge(l1_miknn_scores, by.x = c("audio", "snr"), by.y=c("CleanFile", "Degradation"), all.x=TRUE) |>
+    merge(l1_siib_scores, by.x = c("audio", "snr"), by.y=c("filename", "snr"), all.x=TRUE) |>
+    merge(l1_siib_scores_gaussian, by.x = c("audio", "snr"), by.y=c("filename", "snr"), all.x=TRUE) |>
+    as_tibble()
+  all_data<-rename(all_data, stoi_score=score)
+  all_data <- replace_na(all_data, list(stoi_score=1))
+  all_data <- mutate(.data=all_data, sim_wcr=autoscore/numwords, response_lc=tolower(response), target_lc=tolower(target), sim_editdist=stringsim(target_lc,response_lc))
+}
+
+all_data <- prep("data/l1res.csv", stoi_scores_loc="data/stoi_scores.csv", miknn_scores_loc="data/miknn_scores.csv", siib_scores_loc="data/siib_scores.csv", siib_scores_gaussian_loc="data/siib_scores_gaussian.csv")
+
+```
+
+I assume a rater is "inaccurate" if they fail to score a clean file perfectly, and I discard all of their ratings.
+
+```{r}
+
+blacklist_wcr <- all_data |>
+  select(id, snr, sim_wcr) |>
+  filter(snr=="Q" & (sim_wcr < 1.0)) |>
+  pull(id) |>
+  unique()
+  
+
+blacklist_ed <- all_data |> 
+  filter(snr=="Q" & (sim_editdist < 0.9)) |>
+  select(id) |>
+  unique() |>
+  pull(id)
+
+blacklist_all <- dplyr::union(blacklist_ed, blacklist_wcr)
+```
+
+Some logistic functions
+
+```{r}
+logist_taal2010_stoi <- function(d, a, b) {
+  100 / (1 + exp(a * d + b))
+}
+
+logist_taal2010_nsec <- function(d,a,b,c) {
+  100 / (1 + (a*d + b)^c)
+}
+```
+
+I define some useful operators in case it's useful
+
+```{r}
+`%sp%` <- function(df, spk) {
+  filter(df, speaker == spk)
+}
+```
+
+Functions for easily filtering data
+
+```{r}
+filter_data <- function(data, col, val, bl, ...) {
+  
+  ls = list(...)
+
+  data <- data |> 
+    subset(!(id %in% bl)) |>
+    filter({{col}} %in% {{val}})
+  data
+}
+
+apply_bl <- function(data, bl) {
+  data <- data |> subset(!(id %in% bl))
+}
+
+noq <- function(data) {
+  data |> filter(snr != 'Q')
+}
+```
+
+Finally I use the function
+
+```{r}
+filtered_data <- apply_bl(
+  data=all_data, 
+  bl=blacklist_wcr)
+
+
+```
+
+TBD
+
+```{r}
+prep_plot <- function(data, x, y) {
+  ggplot(data=data, aes(x={{x}}, y={{y}}, color = factor(snr, levels =   snr_order)))
+}
+
+prep_stoi_miknn_plot <- function(data) {
+    ggplot(data=data, aes(x=stoi_score, y=MIKNNScore2x, color = factor(snr, levels =   snr_order)))
+}
+
+prep_stoi_siib_plot <- function(data) {
+    ggplot(data=data, aes(x=stoi_score, y=siib_score_gaussian, color = factor(snr, levels =   snr_order)))
+}
+```
+
+```{r}
+p <- prep_plot(noq(filtered_data), stoi_score, MIKNNScore2x)
+p + geom_point() + labs(x="STOI Score", y="MIKNN Score", color="SNR") + geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "red")
+
+p <- prep_plot(noq(filtered_data), stoi_score, siib_score)
+p + geom_point() + labs(x="STOI Score", y="SIIB Score", color="SNR") + geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "red")
+
+p <- prep_plot(noq(filtered_data), stoi_score, siib_score_gaussian)
+p + geom_point() + labs(x="STOI Score", y="SIIB Score (Gaussian)", color="SNR") + geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "red")
+
+p_siibgaus_siib <- prep_plot(noq(filtered_data), siib_score_gaussian, siib_score)
+p_siibgaus_siib + geom_point() + labs(x="SIIB Score (Gaussian)", y="SIIB Score", color="SNR") + geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "red")
+```
+
+```{r}
+fit <- lm(data=noq(filtered_data), formula=MIKNNScore2x ~ stoi_score)
+summary(fit)
+```
+
+```{r}
+p <- prep_plot(filtered_data %sp% 51)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+#fit <- nls(sim_editdist ~ fun(stoi_score, a, b), start=list(a=-3,b=2), data=data)
+#preds <- predict(fit)
+#pearson_cor <- cor(data$stoi_score, data$sim_editdist, method = "pearson")
+```

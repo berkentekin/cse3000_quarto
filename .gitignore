@@ -1,0 +1,8 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+data/audio
+.{mp3,wav}
+
+/.quarto/
