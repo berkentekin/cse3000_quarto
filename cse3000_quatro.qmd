@@ -153,7 +153,15 @@ p + geom_point() + labs(x="STOI Score", y="SIIB Score (Gaussian)", color="SNR") 
 
 p_siibgaus_siib <- prep_plot(noq(filtered_data), siib_score_gaussian, siib_score)
 p_siibgaus_siib + geom_point() + labs(x="SIIB Score (Gaussian)", y="SIIB Score", color="SNR") + geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "red")
+
+kendall_stoi_miknn <- cor(noq(filtered_data)$stoi_score, noq(filtered_data)$MIKNNScore2x, method = "kendall")
+kendall_stoi_miknn
+
+kendall_stoi_siibgauss <- cor(noq(filtered_data)$stoi_score, noq(filtered_data)$siib_score_gaussian, method = "kendall")
+kendall_stoi_siibgauss
 ```
+
+\
 
 ```{r}
 fit <- lm(data=noq(filtered_data), formula=MIKNNScore2x ~ stoi_score)
