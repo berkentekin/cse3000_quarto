@@ -8,3 +8,6 @@ data/audio
 
 /.quarto/
 cse3000_quarto_files
+*.txt
+
+*.csv
