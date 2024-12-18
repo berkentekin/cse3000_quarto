@@ -1,0 +1,3 @@
+[submodule "cse3000_miknn"]
+	path = cse3000_miknn
+	url = https://github.com/berkentekin/cse3000_miknn
