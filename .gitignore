@@ -4,5 +4,7 @@
 .Ruserdata
 data/audio
 .{mp3,wav}
+.{csv,txt}
 
 /.quarto/
+cse3000_quarto_files
