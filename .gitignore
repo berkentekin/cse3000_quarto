@@ -12,3 +12,5 @@ cse3000_quarto_files
 
 *.csv
 *.html
+data.rar
+.DS_Store

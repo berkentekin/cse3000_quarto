@@ -284,6 +284,16 @@ ggplot() +
 
 ```
 
+### Experiment 1
+
+```{r}
+# 1- sample 5% for each different SNR, preferably with same listeners (cluster?)
+# 2- Fit curve
+# 3- Obtain listener IDs
+# 4- Create samples for each SNR with different listener IDs
+# 5- Test curve
+```
+
 \
 
 ```{r}
