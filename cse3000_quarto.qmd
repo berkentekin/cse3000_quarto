@@ -19,6 +19,7 @@ if (!require("ggpmisc")) {
   install.packages("ggpmisc")
 }
 
+
 ```
 
 Helpful variables
@@ -37,27 +38,36 @@ prep <- function(metadata_csv_loc, ...) {
   miknn_scores_loc <- scores[["miknn_scores_loc"]]
   siib_scores_loc <- scores[["siib_scores_loc"]]
   siib_scores_gaussian_loc <- scores[["siib_scores_gaussian_loc"]]
+  siib_scores_gaussian_gapped_loc <- scores[["siib_scores_gaussian_gapped_loc"]]
   
   l1_data<- metadata_csv_loc |> read.csv(sep = ";") |> as_tibble()
   l1_stoi_scores <- stoi_scores_loc |> read.csv(sep=",") |> as_tibble()
   l1_miknn_scores <- miknn_scores_loc |> read.csv(sep=",") |> as_tibble()
   l1_siib_scores <- siib_scores_loc |> read.csv(sep=",") |> as_tibble()
   l1_siib_scores_gaussian <- siib_scores_gaussian_loc |> read.csv(sep=",") |> as_tibble()
+    l1_siib_scores_gaussian_gapped <- siib_scores_gaussian_gapped_loc |> read.csv(sep=",") |> as_tibble()
   
   all_data <- l1_data |> 
     merge(l1_stoi_scores, by.x = c("audio", "snr"), by.y=c("filename", "snr"), all.x=TRUE) |>
      merge(l1_miknn_scores, by.x = c("audio", "snr"), by.y=c("CleanFile", "Degradation"), all.x=TRUE) |>
     merge(l1_siib_scores, by.x = c("audio", "snr"), by.y=c("filename", "snr"), all.x=TRUE) |>
     merge(l1_siib_scores_gaussian, by.x = c("audio", "snr"), by.y=c("filename", "snr"), all.x=TRUE) |>
+    merge(l1_siib_scores_gaussian_gapped, by.x = c("audio", "snr"), by.y=c("filename", "snr"), all.x=TRUE) |>
     as_tibble()
   
   all_data <- rename(all_data, stoi_score=score)
+  
   all_data <- replace_na(all_data, list(stoi_score=1))
   all_data <- mutate(.data=all_data, sim_wcr=autoscore/numwords, response_lc=tolower(response), target_lc=tolower(target), sim_editdist=stringsim(target_lc,response_lc))
   
 }
 
-all_data <- prep("data/l1res.csv", stoi_scores_loc="data/stoi_scores.csv", miknn_scores_loc="data/miknn_scores.csv", siib_scores_loc="data/siib_scores.csv", siib_scores_gaussian_loc="data/siib_scores_gaussian.csv")
+all_data <- prep("data/l1res.csv",
+                 stoi_scores_loc="data/stoi_scores.csv",
+                 miknn_scores_loc="data/miknn_scores.csv",
+                 siib_scores_loc="data/siib_scores.csv",
+                 siib_scores_gaussian_loc="data/siib_scores_gaussian.csv",
+                 siib_scores_gaussian_gapped_loc="data/siib_scores_gaussian_gapped.csv")
 
 ```
 
@@ -166,6 +176,16 @@ p + geom_point() + labs(x="STOI Score", y="SIIB Score (Gaussian)", color="SNR") 
 p_siibgaus_siib <- prep_plot(noq(filtered_data), siib_score_gaussian, siib_score)
 p_siibgaus_siib + geom_point() + labs(x="SIIB Score (Gaussian)", y="SIIB Score", color="SNR") + geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "red")
 
+p <- prep_plot(noq(filtered_data), stoi_score, siib_score_gaussian_gapped)
+p + geom_point() + labs(x="STOI Score", y="SIIB Score (Gaussian)", color="SNR") + geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "red")
+
+p_siibgaus_siib <- prep_plot(noq(filtered_data), siib_score_gaussian_gapped, siib_score)
+p_siibgaus_siib + geom_point() + labs(x="SIIB Score (Gaussian)", y="SIIB Score", color="SNR") + geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "red")
+
+
+p <- prep_plot(noq(filtered_data), siib_score_gaussian, siib_score_gaussian_gapped)
+p + geom_point() + labs(x="SIIB gaus", y="SIIB Score (Gaussian) gapped", color="SNR") + geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "red")
+
 kendall_stoi_miknn <- cor(noq(filtered_data)$stoi_score, noq(filtered_data)$MIKNNScore2x, method = "kendall")
 kendall_stoi_miknn
 
@@ -179,8 +199,11 @@ kendall_stoi_siibgauss
 \
 
 ```{r}
-fit <- lm(data=noq(filtered_data), formula=MIKNNScore2x ~ stoi_score)
-summary(fit)
+fit <- lm(data=noq(filtered_data), formula=siib_score_gaussian_gapped ~ siib_score_gaussian
+          )
+
+c<-cor(x=noq(filtered_data)$siib_score_gaussian, y=noq(filtered_data)$siib_score_gaussian_gapped, method="kendall")
+summary(c)
 ```
 
 ```{r}
@@ -204,6 +227,64 @@ p + geom_point() + labs(x="MIKNN Score", y="Subjective Score (WCR)", color="SNR"
 #preds <- predict(fit)
 #pearson_cor <- cor(data$stoi_score, data$sim_editdist, method = "pearson")
 ```
+
+```{r}
+all_wcrs <- all_data |> select(sim_wcr) |> unique()
+all_wcrs <- all_data |> group_by(sim_wcr) |> summarise(avg_stoi_score = mean(stoi_score))
+
+p <- ggplot(all_wcrs, aes(avg_stoi_score, sim_wcr))
+p + geom_point()
+
+all_stoi <- all_data |> group_by(stoi_score) |> summarise(avg_wcr = mean(sim_wcr))
+
+p <- ggplot(all_stoi, aes(stoi_score, avg_wcr))
+p + geom_point()
+
+sampled_all_data <- all_data |> sample_n(500)
+
+ggplot(sampled_all_data, aes(x=stoi_score, y=sim_wcr)) + geom_point()
+
+all_stoi_binned <- all_data %>%
+  # Create 10 bins (breaks = 10) across the full range of stoi_score
+  mutate(stoi_bin = cut(stoi_score, breaks = 20, include.lowest = TRUE)) %>%
+  # Group by the bin instead of the raw stoi_score
+  group_by(stoi_bin) %>%
+  summarise(avg_wcr = mean(sim_wcr, na.rm = TRUE))
+
+pasb <- ggplot(all_stoi_binned, aes(x = stoi_bin, y = avg_wcr))
+
+pasb +  geom_point() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate labels if needed
+
+
+all_stoi_binned_filt <- filtered_data %>%
+  # Create 10 bins (breaks = 10) across the full range of stoi_score
+  mutate(stoi_bin = cut(stoi_score, breaks = 20, include.lowest = TRUE)) %>%
+  # Group by the bin instead of the raw stoi_score
+  group_by(stoi_bin) %>%
+  summarise(avg_wcr = mean(sim_wcr, na.rm = TRUE))
+
+pasbf <- ggplot(all_stoi_binned_filt, aes(x = stoi_bin, y = avg_wcr))
+
+
+ggplot() +
+  geom_point(
+    data = all_stoi_binned, 
+    aes(x = stoi_bin, y = avg_wcr),
+    color = "blue"        # for example
+  ) +
+  geom_point(
+    data = all_stoi_binned_filt, 
+    aes(x = stoi_bin, y = avg_wcr),
+    color = "red"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+```
+
+\
 
 ```{r}
 
@@ -241,4 +322,56 @@ for (snr in snr_order) {
 #fit <- nls(sim_editdist ~ fun(stoi_score, a, b), start=list(a=-3,b=2), data=data)
 #preds <- predict(fit)
 #pearson_cor <- cor(data$stoi_score, data$sim_editdist, method = "pearson")
+```
+
+Experiment: discard last word for SNR, removes clipping effects
+
+```{r}
+data_no_lw <- all_data
+data_no_lw$target <- all_data["target"] |> sapply(function(x){sub("\\s+\\S+$", "", x)})
+data_no_lw$response <- all_data["response"] |> sapply(function(x){sub("\\s+\\S+$", "", x)})
+
+class(data_no_lw)
+
+data_no_lw <- mutate(.data=data_no_lw, response_lc=tolower(response), target_lc=tolower(target), sim_editdist=stringsim(target_lc,response_lc))
+
+
+f53 <- data_no_lw %sp% 53
+p <- prep_plot(data_no_lw, stoi_score, sim_wcr)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(data_no_lw, stoi_score, sim_editdist)
+p + geom_point() + labs(x="STOI Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(data_no_lw |> noq(), siib_score, sim_wcr)
+p + geom_point() + labs(x="SIIB Score", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(data_no_lw |> noq(), siib_score_gaussian, sim_wcr)
+p + geom_point() + labs(x="SIIB Score (Gaussian)", y="Subjective Score (WCR)", color="SNR")
+
+p <- prep_plot(data_no_lw |> noq(), MIKNNScore2x, sim_wcr)
+p + geom_point() + labs(x="MIKNN Score", y="Subjective Score (WCR)", color="SNR")
+```
+
+```{r}
+
+create_bins <- function(data, x) {
+  binned_data <- data |> noq() |> mutate(
+    bin = case_when(
+      {{x}} == 0 ~ "0",
+      {{x}} <= 0.2 ~ "0 < 0.2",
+      {{x}} <= 0.4 ~ "0.2 - 0.4",
+      {{x}} <= 0.6 ~ "0.4 - 0.6",
+      {{x}} <= 0.8 ~ "0.6 - 0.8",
+      {{x}} < 1 ~ "0.8 < 1",
+      TRUE ~ "1"
+    )
+)
+}
+
+
+filtered_data |> create_bins(sim_wcr) |> ggplot(aes(x = bin)) + geom_histogram(stat = "count")
+
+p <- filtered_data |> noq() |> ggplot(aes(x=sim_editdist))
+p + geom_histogram(bins=5) 
 ```
