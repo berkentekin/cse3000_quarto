@@ -91,17 +91,49 @@ blacklist_ed <- all_data |>
 blacklist_all <- dplyr::union(blacklist_ed, blacklist_wcr)
 ```
 
-Some logistic functions
+### Some logistic functions
 
 ```{r math-formulas}
-logist_taal2010_stoi <- function(d, a, b, fac=1) {
-  fac / (1 + exp(a * d + b))
+
+# If your formula is something like `wcr ~ stoi`:
+# The predictor name is `stoi`, so the function signature should have `stoi` as the first argument.
+logist_taal2010_stoi <- function(stoi, a, b, fac = 1) {
+  fac / (1 + exp(a * stoi + b))
 }
 
+logist_taal2010_stoi_INVERSE <- function(stoi, a, b, fac = 1) {
+  (log((fac / a) - 1) - b) / stoi
+}
 
+# If your formula is something like `wcr ~ nsec`:
+# The predictor name is `nsec`.
+logist_taal2010_nsec <- function(nsec, a, b, c, fac = 1) {
+  fac / (1 + (a * nsec + b)^c)
+}
 
-logist_taal2010_nsec <- function( d,a,b,c, fac=1) {
-  fac / (1 + (a*d + b)^c)
+rmse <- function(data, formula, f, fit) {
+  # 1. Extract the response (left side) and predictor(s) (right side) from the formula
+  lhs <- all.vars(formula)[1]        # response variable name
+  rhs <- all.vars(formula)[-1]       # predictor variable name(s), if multiple, keep them all
+  
+  # 2. Get the actual data vectors
+  observed <- data[[lhs]]           # the response in the data
+  predictors <- data[rhs]           # a data.frame of predictors if multiple
+  
+  # 3. Extract the fitted coefficients from the model
+  coefs <- coef(fit)
+  
+  # 4. Construct a list of arguments to pass to f()
+  #    - f() must take the predictor(s) as first argument(s), 
+  #      then the coefficients. 
+  #    - If your function takes multiple predictors, adapt accordingly.
+  f_args <- c(as.list(predictors), as.list(coefs))
+  
+  # 5. Generate predictions
+  predicted <- do.call(f, f_args)
+  
+  # 6. Compute and return RMSE
+  sqrt(mean((observed - predicted)^2, na.rm = TRUE))
 }
 ```
 
@@ -291,8 +323,15 @@ ggplot() +
 ```{r exp-1}
 # 1- sample 5% for each different SNR, preferably with same listeners (cluster?) 
 
-## Take 5% of unique IDs (I have confirmed all ID's have been exposed to all SNRs)
-data_lis_slice <- all_data |> group_by(id) |> slice_sample(prop=0.05)
+# 1. Identify all unique listeners
+unique_ids <- unique(all_data$id)
+
+# 2. Randomly sample 5% of them
+sampled_ids <- sample(unique_ids, size = ceiling(length(unique_ids) * 0.05))
+
+# 3. Filter all_data to just those IDs
+data_lis_slice <- all_data %>%
+  filter(id %in% sampled_ids)
 
 ## Take the minimum among SNRs
 mc <- data_lis_slice |> group_by(snr) |> count(snr) |> pull(n) |> min()
@@ -300,6 +339,7 @@ mc <- data_lis_slice |> group_by(snr) |> count(snr) |> pull(n) |> min()
 ## Prune data until there are equal number of SNRs 
 data_lis_slice <- data_lis_slice |> group_by(snr) |> slice_sample(n = mc) |> ungroup()
 
+listeners <- data_lis_slice |> pull(id) |> unique() |> sort() |> print()
 dlss <- data_lis_slice |> noq() |> group_by(snr) |> summarise(avg_stoi = mean(stoi_score, na.rm=TRUE), avg_wcr = mean(sim_wcr, na.rm=TRUE)) |> ungroup() |> mutate(snr = factor(snr,snr_order)) |>   mutate(
     snr_num = as.numeric(gsub("^n", "-", as.character(snr)))
   )
@@ -329,7 +369,8 @@ stoi_grid <- tibble(
   avg_stoi = seq(0,1,length.out=200)
 )
 
-
+given_log_stoi <- stoi_grid |> mutate(avg_wcr_pred= logist_taal2010_stoi(avg_stoi, -15.15, 10.83))
+given_log_stoi100 <- stoi_grid |> mutate(avg_wcr_pred= logist_taal2010_stoi(avg_stoi, -15.15, 10.83, fac=100))
 
 # Predict over that grid
 stoi_grid <- stoi_grid %>%
@@ -338,6 +379,16 @@ stoi_grid <- stoi_grid %>%
 ggplot(dlss, aes(x=avg_stoi, y=avg_wcr)) +
   geom_point() +
   geom_line(data=stoi_grid, aes(x=avg_stoi, y=avg_wcr_pred), color="green", linewidth=1)
+
+dlss <- dlss |> mutate(avg_wcr_scaled = avg_wcr * 100)
+
+ggplot(dlss, aes(x=avg_stoi, y=avg_wcr)) +
+  geom_point() +
+  geom_line(data=stoi_grid, aes(x=avg_stoi, y=avg_wcr_pred), color="green", linewidth=1) +
+  geom_line(data=given_log_stoi, aes(x=avg_stoi,y=avg_wcr_pred), color="blue", linewidth=1)
+
+
+rmse(dlss |> mutate(stoi=avg_stoi, wcr=avg_wcr), wcr ~ stoi, logist_taal2010_stoi, fit_stoi_wcr)
 
 
 # 3- Obtain listener IDs
