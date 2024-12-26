@@ -57,6 +57,7 @@ prep <- function(metadata_csv_loc, ...) {
   
   all_data <- rename(all_data, stoi_score=score)
   
+  all_data <- all_data |> filter(trial>3)
   all_data <- replace_na(all_data, list(stoi_score=1))
   all_data <- mutate(.data=all_data, sim_wcr=autoscore/numwords, response_lc=tolower(response), target_lc=tolower(target), sim_editdist=stringsim(target_lc,response_lc))
   
@@ -167,7 +168,7 @@ apply_bl <- function(data, bl) {
 }
 
 noq <- function(data) {
-  data |> filter(snr != 'Q')
+  data %>% filter(snr != 'Q')
 }
 ```
 
@@ -318,6 +319,154 @@ ggplot() +
 
 ```
 
+```{r}
+get_id_samples <- function(data, percent) {
+  sampled_ids <- data %>%
+    dplyr::pull(id) %>% 
+    unique() %>% 
+    sample(size = ceiling(length(.) * (percent / 100))) 
+ 
+  data <- data %>% noq() %>% filter(id %in% sampled_ids)
+  ## Take the minimum among SNRs
+  mc <- data %>% group_by(snr) %>% count(snr) %>% pull(n) %>% min()
+
+  ## Prune data until there are equal number of samples for each SNR
+  data <- data %>% group_by(snr) %>% slice_sample(n = mc) %>% ungroup()
+  data <- data %>% mutate(snr = factor(snr,snr_order)) %>% mutate(
+    snr_num = as.numeric(gsub("^n", "-", as.character(snr)))
+  )
+}
+
+sampled_data <- get_id_samples(all_data, 5)
+best_fit <- nls(
+  data = sampled_data,
+  formula = sim_wcr ~ logist_taal2010_stoi(stoi_score, a, b),
+  start = c(a=0, b=0)
+)
+
+stoi_grid <- tibble(
+  #avg_stoi = seq(min(dlss$avg_stoi), max(dlss$avg_stoi), length.out = 200)
+  stoi_score = seq(0,1,length.out=200)
+)
+
+stoi_grid <- stoi_grid %>%
+  mutate(wcr_pred = predict(best_fit, newdata = .))
+
+sampled_data <- sampled_data %>% mutate(snr_num = as.factor(snr_num))
+
+ggplot(sampled_data, aes(x=stoi_score, y=sim_wcr, color=snr_num)) +
+  geom_jitter(width = 0.03, height = 0.03, alpha = 0.7) +  # Add jitter
+  geom_point() +
+  geom_line(data = stoi_grid, aes(x=stoi_score, y=wcr_pred), color='blue')
+
+summary(best_fit)
+```
+
+```{r}
+# Author: Berken Tekin, GPT-4o
+std_errs <- list()  # Use a list to store standard errors for each iteration
+t_vals <- list()    # Use a list to store t-values for each iteration
+
+for (x in 1:100) {
+  sampled_data <- get_id_samples(all_data, x)
+  
+  # Try fitting the model and handle potential errors
+  best_fit <- tryCatch(
+    nls(
+      data = sampled_data,
+      formula = sim_wcr ~ logist_taal2010_stoi(stoi_score, a, b),
+      start = c(a = 0, b = 0)
+    ),
+    error = function(e) {
+      message("Error in iteration ", x, ": ", e$message)
+      return(NULL)
+    }
+  )
+  
+  if (!is.null(best_fit)) {
+    # Extract detailed summary
+    model_summary <- summary(best_fit)
+    
+    # Extract standard errors and t-values
+    std_errors <- model_summary$parameters[, "Std. Error"]
+    t_values <- model_summary$parameters[, "t value"]
+    
+    # Name the entries in the t_values for consistency
+    names(t_values) <- names(std_errors) <- c("a", "b")
+    
+    # Convert to data frame and add ID column
+    std_errs[[x]] <- data.frame(ID = x, t(std_errors))
+    t_vals[[x]] <- data.frame(ID = x, t(t_values))
+  } else {
+    # Store NA if the model failed
+    std_errs[[x]] <- data.frame(ID = x, a = NA, b = NA)
+    t_vals[[x]] <- data.frame(ID = x, a = NA, b = NA)
+  }
+}
+
+# Convert lists to data frames
+std_errs_df <- do.call(rbind, std_errs)
+t_vals_df <- do.call(rbind, t_vals)
+
+# Convert to tibble for easier handling
+t_vals_tibble <- as_tibble(t_vals_df)
+std_errs_tibble <- as_tibble(std_errs_df)
+
+# Display results
+print("Standard Errors across iterations:")
+print(std_errs_df)
+
+print("t-values across iterations:")
+print(t_vals_tibble)
+
+# Assuming your dataframe is named df
+# Create the plot
+ggplot(t_vals_tibble, aes(x = ID, y = a)) +
+  geom_line() +           # Line plot
+  geom_point() +          # Add points for each ID
+  labs(
+    title = "Sample Rate vs. t value for a",
+    x = "Sample Rate (ID)",
+    y = "t value for fitted param a",
+  ) +
+  theme_minimal()         # Use a clean theme
+
+ggplot(t_vals_tibble, aes(x = ID, y = b)) +
+  geom_line() +           # Line plot
+  geom_point() +          # Add points for each ID
+  labs(
+    title = "Sample Rate vs. t value for b",
+    x = "Sample Rate (ID)",
+    y = "t value for fitted param b",
+  ) +
+  theme_minimal()         # Use a clean theme
+
+# Create the plot
+ggplot(std_errs_tibble, aes(x = ID, y = a)) +
+  geom_line() +           # Line plot
+  geom_point() +          # Add points for each ID
+  labs(
+    title = "Sample Rate vs. stderr for a",
+    x = "Sample Rate (ID)",
+    y = "stderr for fitted param a",
+  ) +
+  theme_minimal()         # Use a clean theme
+
+ggplot(std_errs_tibble, aes(x = ID, y = b)) +
+  geom_line() +           # Line plot
+  geom_point() +          # Add points for each ID
+  labs(
+    title = "Sample Rate vs. stderr for b",
+    x = "Sample Rate (ID)",
+    y = "stderr for fitted param b",
+  ) +
+  theme_minimal()         # Use a clean theme
+
+```
+
+
+
+
 ### Experiment 1
 
 ```{r exp-1}
@@ -369,7 +518,8 @@ stoi_grid <- tibble(
   avg_stoi = seq(0,1,length.out=200)
 )
 
-given_log_stoi <- stoi_grid |> mutate(avg_wcr_pred= logist_taal2010_stoi(avg_stoi, -15.15, 10.83))
+given_log_stoi <- stoi_grid |> mutate(avg_wcr_pred= logist_taal2010_stoi(avg_stoi, -13.1903, 6.51))
+#given_log_stoi <- stoi_grid |> mutate(avg_wcr_pred= logist_taal2010_stoi(avg_stoi, -15.15, 10.83))
 given_log_stoi100 <- stoi_grid |> mutate(avg_wcr_pred= logist_taal2010_stoi(avg_stoi, -15.15, 10.83, fac=100))
 
 # Predict over that grid
@@ -398,7 +548,6 @@ rmse(dlss |> mutate(stoi=avg_stoi, wcr=avg_wcr), wcr ~ stoi, logist_taal2010_sto
 # 5- Test curve
 ```
 
-\
 
 ```{r}
 
