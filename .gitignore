@@ -3,13 +3,14 @@
 .RData
 .Ruserdata
 data/audio
-.{mp3,wav}
+*.{mp3,wav}
 
 /.quarto/
 cse3000_quarto_files
 data/*.txt
-
+plots/
 data/*.csv
 *.html
 data.rar
 .DS_Store
+*.{jpg,png}

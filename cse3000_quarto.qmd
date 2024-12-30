@@ -19,6 +19,10 @@ if (!require("ggpmisc")) {
   install.packages("ggpmisc")
 }
 
+library("pcaPP")
+library("gamlss")
+library("gamlss.dist")
+library("VGAM")
 
 ```
 
@@ -95,6 +99,21 @@ blacklist_all <- dplyr::union(blacklist_ed, blacklist_wcr)
 ### Some logistic functions
 
 ```{r math-formulas}
+
+
+create_bins <- function(data, x) {
+  binned_data <- data |> noq() |> mutate(
+    bin = case_when(
+      {{x}} == 0 ~ "0",
+      {{x}} <= 0.2 ~ "0 < 0.2",
+      {{x}} <= 0.4 ~ "0.2 - 0.4",
+      {{x}} <= 0.6 ~ "0.4 - 0.6",
+      {{x}} <= 0.8 ~ "0.6 - 0.8",
+      {{x}} < 1 ~ "0.8 < 1",
+      TRUE ~ "1"
+    )
+)
+}
 
 # If your formula is something like `wcr ~ stoi`:
 # The predictor name is `stoi`, so the function signature should have `stoi` as the first argument.
@@ -363,13 +382,24 @@ summary(best_fit)
 ```
 
 ```{r}
+
+library("pcaPP")
 # Author: Berken Tekin, GPT-4o
 std_errs <- list()  # Use a list to store standard errors for each iteration
 t_vals <- list()    # Use a list to store t-values for each iteration
+residual_stderrs <- list()
+std_errs_avg <- list()  # Use a list to store standard errors for each iteration
+t_vals_avg <- list()    # Use a list to store t-values for each iteration
+residual_stderrs_avg <- list()
+ktaus <- list()
+ktaus_avg <- list()
+
 
 for (x in 1:100) {
   sampled_data <- get_id_samples(all_data, x)
-  
+  sampled_data_avg <- sampled_data |> noq() |> group_by(snr) |> summarise(avg_stoi = mean(stoi_score, na.rm=TRUE), avg_wcr = mean(sim_wcr, na.rm=TRUE)) |> ungroup() |> mutate(snr = factor(snr,snr_order)) |>   mutate(
+    snr_num = as.numeric(gsub("^n", "-", as.character(snr)))
+  )
   # Try fitting the model and handle potential errors
   best_fit <- tryCatch(
     nls(
@@ -382,36 +412,83 @@ for (x in 1:100) {
       return(NULL)
     }
   )
+  best_fit_avg <- tryCatch(
+    nls(
+      data = sampled_data_avg,
+      formula = avg_wcr ~ logist_taal2010_stoi(avg_stoi,a,b),
+      start = c(a = 0, b = 0)
+    ),
+    error = function(e) {
+      message("Error in iteration ", x, ": ", e$message)
+      return(NULL)
+    }
+  )
   
   if (!is.null(best_fit)) {
     # Extract detailed summary
     model_summary <- summary(best_fit)
+    ktaus[[x]] <- cor.fk(y=sampled_data$sim_wcr, x=sampled_data$stoi_score)
     
     # Extract standard errors and t-values
     std_errors <- model_summary$parameters[, "Std. Error"]
     t_values <- model_summary$parameters[, "t value"]
+    residual_stderr <- model_summary[["sigma"]]
     
     # Name the entries in the t_values for consistency
     names(t_values) <- names(std_errors) <- c("a", "b")
+    names(residual_stderr) <- c("residual_stderr")
     
     # Convert to data frame and add ID column
     std_errs[[x]] <- data.frame(ID = x, t(std_errors))
     t_vals[[x]] <- data.frame(ID = x, t(t_values))
+    residual_stderrs[[x]] <- data.frame(ID = x, t(residual_stderr))
+
   } else {
     # Store NA if the model failed
     std_errs[[x]] <- data.frame(ID = x, a = NA, b = NA)
     t_vals[[x]] <- data.frame(ID = x, a = NA, b = NA)
+  }
+  
+  
+  if (!is.null(best_fit_avg)) {
+    # Extract detailed summary
+    model_summary_avg <- summary(best_fit_avg)
+    
+    ktaus_avg[[x]] <- cor(y=sampled_data_avg$avg_wcr, x=sampled_data_avg$avg_stoi, method="kendall")
+    # Extract standard errors and t-values
+    std_errors_avg <- model_summary_avg$parameters[, "Std. Error"]
+    t_values_avg <- model_summary_avg$parameters[, "t value"]
+    residual_stderr_avg <- model_summary_avg[["sigma"]]
+    
+    # Name the entries in the t_values for consistency
+    names(t_values_avg) <- names(std_errors_avg) <- c("a", "b")
+    names(residual_stderr_avg) <- c("residual_stderr")
+    
+    # Convert to data frame and add ID column
+    std_errs_avg[[x]] <- data.frame(ID = x, t(std_errors_avg))
+    t_vals_avg[[x]] <- data.frame(ID = x, t(t_values_avg))
+    residual_stderrs_avg[[x]] <- data.frame(ID = x, t(residual_stderr_avg))
+
+  } else {
+    # Store NA if the model failed
+    std_errs_avg[[x]] <- data.frame(ID = x, a = NA, b = NA)
+    t_vals_avg[[x]] <- data.frame(ID = x, a = NA, b = NA)
   }
 }
 
 # Convert lists to data frames
 std_errs_df <- do.call(rbind, std_errs)
 t_vals_df <- do.call(rbind, t_vals)
+residual_stderrs_df <- do.call(rbind, residual_stderrs)
+
+std_errs_avg_df <- do.call(rbind, std_errs_avg)
+t_vals_avg_df <- do.call(rbind, t_vals_avg)
+residual_stderrs_avg_df <- do.call(rbind, residual_stderrs_avg)
 
 # Convert to tibble for easier handling
-t_vals_tibble <- as_tibble(t_vals_df)
-std_errs_tibble <- as_tibble(std_errs_df)
-
+t_vals_avg_tibble <- as_tibble(t_vals_avg_df)
+std_errs_avg_tibble <- as_tibble(std_errs_avg_df)
+residual_stderrs_avg_tibble <- as_tibble(residual_stderrs_avg_df)
 # Display results
 print("Standard Errors across iterations:")
 print(std_errs_df)
@@ -462,6 +539,72 @@ ggplot(std_errs_tibble, aes(x = ID, y = b)) +
   ) +
   theme_minimal()         # Use a clean theme
 
+ggplot(residual_stderrs_tibble, aes(x = ID, y = residual_stderr)) +
+  geom_line() +           # Line plot
+  geom_point() +          # Add points for each ID
+  labs(
+    title = "Sample Rate vs. stderr for b",
+    x = "Sample Rate (ID)",
+    y = "Residual standard error",
+  ) +
+  theme_minimal()         # Use a clean theme
+
+
+######### AVGS
+ggplot(t_vals_avg_tibble, aes(x = ID, y = a)) +
+  geom_line() +           # Line plot
+  geom_point() +          # Add points for each ID
+  labs(
+    title = "Sample Rate vs. t value for a",
+    x = "Sample Rate (ID)",
+    y = "t value for fitted param a",
+  ) +
+  theme_minimal()         # Use a clean theme
+
+ggplot(t_vals_avg_tibble, aes(x = ID, y = b)) +
+  geom_line() +           # Line plot
+  geom_point() +          # Add points for each ID
+  labs(
+    title = "Sample Rate vs. t value for b",
+    x = "Sample Rate (ID)",
+    y = "t value for fitted param b",
+  ) +
+  theme_minimal()         # Use a clean theme
+
+# Create the plot
+ggplot(std_errs_avg_tibble, aes(x = ID, y = a)) +
+  geom_line() +           # Line plot
+  geom_point() +          # Add points for each ID
+  labs(
+    title = "Sample Rate vs. stderr for a",
+    x = "Sample Rate (ID)",
+    y = "stderr for fitted param a",
+  ) +
+  theme_minimal()         # Use a clean theme
+
+ggplot(std_errs_avg_tibble, aes(x = ID, y = b)) +
+  geom_line() +           # Line plot
+  geom_point() +          # Add points for each ID
+  labs(
+    title = "Sample Rate vs. stderr for b",
+    x = "Sample Rate (ID)",
+    y = "stderr for fitted param b",
+  ) +
+  theme_minimal()         # Use a clean 
+
+
+ggplot(residual_stderrs_avg_tibble, aes(x = ID, y = residual_stderr)) +
+  geom_line() +           # Line plot
+  geom_point() +          # Add points for each ID
+  labs(
+    title = "Sample Rate vs. stderr for b",
+    x = "Sample Rate (ID)",
+    y = "Residual standard error",
+  ) +
+  theme_minimal()         # Use a clean theme
+
+
+
 ```
 
 
@@ -476,7 +619,7 @@ ggplot(std_errs_tibble, aes(x = ID, y = b)) +
 unique_ids <- unique(all_data$id)
 
 # 2. Randomly sample 5% of them
-sampled_ids <- sample(unique_ids, size = ceiling(length(unique_ids) * 0.05))
+sampled_ids <- sample(unique_ids, size = ceiling(length(unique_ids) * 1))
 
 # 3. Filter all_data to just those IDs
 data_lis_slice <- all_data %>%
@@ -489,12 +632,16 @@ mc <- data_lis_slice |> group_by(snr) |> count(snr) |> pull(n) |> min()
 data_lis_slice <- data_lis_slice |> group_by(snr) |> slice_sample(n = mc) |> ungroup()
 
 listeners <- data_lis_slice |> pull(id) |> unique() |> sort() |> print()
-dlss <- data_lis_slice |> noq() |> group_by(snr) |> summarise(avg_stoi = mean(stoi_score, na.rm=TRUE), avg_wcr = mean(sim_wcr, na.rm=TRUE)) |> ungroup() |> mutate(snr = factor(snr,snr_order)) |>   mutate(
+dlss <- data_lis_slice |> noq() |> group_by(snr) |> summarise(avg_stoi = mean(stoi_score, na.rm=TRUE), avg_wcr = mean(sim_wcr, na.rm=TRUE), avg_miknn = mean(MIKNNScore2x), avg_siib = mean(siib_score),avg_siibgg = mean(siib_score_gaussian_gapped)) |> ungroup() |> mutate(snr = factor(snr,snr_order)) |>   mutate(
+  
     snr_num = as.numeric(gsub("^n", "-", as.character(snr)))
   )
 
 dlss |> ggplot(aes(x=snr_num, y=avg_wcr)) + geom_point()
 dlss |> ggplot(aes(x=snr_num, y=avg_stoi)) + geom_point()
+dlss |> ggplot(aes(x=snr_num, y=avg_siibgg)) + geom_point()
+dlss |> ggplot(aes(x=snr_num, y=avg_siib)) + geom_point()
+dlss |> ggplot(aes(x=snr_num, y=avg_miknn)) + geom_point()
 dlss |> ggplot(aes(x=avg_stoi, y=avg_wcr)) + geom_point()
 
 # 2- Fit curve
@@ -548,6 +695,64 @@ rmse(dlss |> mutate(stoi=avg_stoi, wcr=avg_wcr), wcr ~ stoi, logist_taal2010_sto
 # 5- Test curve
 ```
 
+```{r}
+
+tidier <- function(data) {
+  data <- data %>% noq() %>% mutate(snr = factor(snr,snr_order)) %>% mutate(
+    snr = as.numeric(gsub("^n", "-", as.character(snr))))
+}
+
+data <- all_data %>% tidier()
+data_grouped_by_id_mix_snr <- data %>% 
+  group_by(id) %>% 
+  summarise(avg_wcr = mean(sim_wcr), 
+            avg_stoi_score = mean(stoi_score), 
+            avg_miknn_score = mean(MIKNNScore2x),
+            avg_siib_score = mean(siib_score),
+            avg_siib_score_gaussian_gapped = mean(siib_score_gaussian_gapped),
+            .groups="drop") %>% 
+  mutate(snr = as_factor(snr))
+
+data_grouped_by_id <- data %>% 
+  group_by(id, snr) %>% 
+  summarise(avg_wcr = mean(sim_wcr), 
+            avg_stoi_score = mean(stoi_score), 
+            avg_miknn_score = mean(MIKNNScore2x),
+            avg_siib_score = mean(siib_score),
+            avg_siib_score_gaussian_gapped = mean(siib_score_gaussian_gapped),
+            .groups="drop") %>% 
+  mutate(snr = as_factor(snr))
+
+best_fit_lt2010 <- nls(
+  formula = avg_wcr ~ logist_taal2010_stoi(avg_stoi_score, a, b),
+  data = data_grouped_by_id,
+  start = c(a=0,b=0)
+)
+
+stoi_grid <- tibble(
+  #avg_stoi = seq(min(dlss$avg_stoi), max(dlss$avg_stoi), length.out = 200)
+  avg_stoi_score = seq(0,1,length.out=200)
+) %>% mutate(avg_wcr_pred = predict(best_fit_lt2010, newdata = .))
+
+ggplot(data=data_grouped_by_id, mapping = aes(x = avg_stoi_score, y = avg_wcr, color = snr)) + geom_point() +geom_line(data=stoi_grid, aes(x=avg_stoi_score, y=avg_wcr_pred), color="blue", linewidth=1)
+ggplot(data=data_grouped_by_id, mapping = aes(x = avg_miknn_score, y = avg_wcr, color = snr)) + geom_point()
+ggplot(data=data_grouped_by_id, mapping = aes(x = avg_siib_score, y = avg_wcr, color = snr)) + geom_point()
+ggplot(data=data_grouped_by_id, mapping = aes(x = avg_siib_score_gaussian_gapped, y = avg_wcr, color = snr)) + geom_point()
+
+avg_wcr_bins <- create_bins(data_grouped_by_id, avg_wcr)
+avg_stoi_bins <- create_bins(data_grouped_by_id, avg_stoi_score)
+
+avg_wcr_bins %>% ggplot(aes(x = bin)) + geom_histogram(stat = "count")
+avg_stoi_bins %>% ggplot(aes(x = bin)) + geom_histogram(stat = "count")
+
+
+
+data %>% noq() %>% create_bins(sim_wcr) %>% ggplot(aes(x = bin)) + geom_histogram(stat = "count")
+data %>% noq() %>% create_bins(stoi_score) %>% ggplot(aes(x = bin)) + geom_histogram(stat = "count")
+
+data %snr% -4 %>% tidier() %>% ggplot(aes(x = sim_wcr)) + geom_histogram(bins=8)
+
+```
 
 ```{r}
 
@@ -618,23 +823,5 @@ p + geom_point() + labs(x="MIKNN Score", y="Subjective Score (WCR)", color="SNR"
 
 ```{r}
 
-create_bins <- function(data, x) {
-  binned_data <- data |> noq() |> mutate(
-    bin = case_when(
-      {{x}} == 0 ~ "0",
-      {{x}} <= 0.2 ~ "0 < 0.2",
-      {{x}} <= 0.4 ~ "0.2 - 0.4",
-      {{x}} <= 0.6 ~ "0.4 - 0.6",
-      {{x}} <= 0.8 ~ "0.6 - 0.8",
-      {{x}} < 1 ~ "0.8 < 1",
-      TRUE ~ "1"
-    )
-)
-}
 
-
-filtered_data |> create_bins(sim_wcr) |> ggplot(aes(x = bin)) + geom_histogram(stat = "count")
-
-p <- filtered_data |> noq() |> ggplot(aes(x=sim_editdist))
-p + geom_histogram(bins=5) 
 ```

@@ -1,0 +1,228 @@
+---
+title: "InfBetaExperiment"
+---
+
+### Install required Libraries
+
+```{r libraries}
+library("tidyverse")
+library("ggpmisc")
+library("pcaPP")
+library("gamlss")
+library("gamlss.dist")
+library("gamlss.random")
+library("VGAM")
+library("purrr")
+```
+
+### Helper constants, functions and operators
+
+```{r}
+
+snr_order <- c("n4", "n2", "0", "2", "4", "6", "8", "Q")
+
+noq <- function(data) {
+  data %>% filter(snr != 'Q')
+}
+
+`%snr%` <- function(df, val) {
+  filter(df, snr == val)
+}
+
+tidier <- function(data) {
+  data <- data %>% noq() %>% mutate(snr = factor(snr,snr_order)) %>% mutate(
+    snr = as.numeric(gsub("^n", "-", as.character(snr))))
+}
+```
+### Zero and one inflated Beta Distribution (Hu et al., 2015)
+```{r beinf}
+
+
+
+```
+### Read observations for ALLSSTAR
+
+```{r csv_readers}
+prepare_allsstar <- function(metadata_csv_loc, ...) {
+  # Helper function to read CSV files and convert them to tibbles
+  read_as_tibble <- function(filepath, sep = ",") {
+    read.csv(filepath, sep = sep) %>% as_tibble()
+  }
+  
+  # Gather the additional score file paths
+  scores <- list(...)
+  
+  # Read the input files
+  l1_data <- read_as_tibble(metadata_csv_loc, sep = ";")
+  l1_stoi_scores <- read_as_tibble(scores[["stoi_scores_loc"]])
+  l1_miknn_scores <- read_as_tibble(scores[["miknn_scores_loc"]])
+  l1_siib_scores <- read_as_tibble(scores[["siib_scores_loc"]])
+  l1_siib_scores_gaussian <- read_as_tibble(scores[["siib_scores_gaussian_loc"]])
+  l1_siib_scores_gaussian_gapped <- read_as_tibble(scores[["siib_scores_gaussian_gapped_loc"]])
+  
+  # Merge all data
+  allsstar_data <- l1_data %>%
+    merge(l1_stoi_scores, by.x = c("audio", "snr"), by.y = c("filename", "snr"), all.x = TRUE) %>%
+    merge(l1_miknn_scores, by.x = c("audio", "snr"), by.y = c("CleanFile", "Degradation"), all.x = TRUE) %>%
+    merge(l1_siib_scores, by.x = c("audio", "snr"), by.y = c("filename", "snr"), all.x = TRUE) %>%
+    merge(l1_siib_scores_gaussian, by.x = c("audio", "snr"), by.y = c("filename", "snr"), all.x = TRUE) %>%
+    merge(l1_siib_scores_gaussian_gapped, by.x = c("audio", "snr"), by.y = c("filename", "snr"), all.x = TRUE)
+  
+  # Perform additional transformations
+  allsstar_data <- allsstar_data %>% tidier() %>%
+    rename(stoi_score = score) %>%
+    filter(trial > 3) %>%
+    replace_na(list(stoi_score = 1)) %>%
+    mutate(sim_wcr = autoscore / numwords) # Ensure autoscore and numwords exist
+  
+  # Return the final data
+  return(allsstar_data)
+}
+
+```
+
+```{r create-allsstar-df}
+allsstar_data <- prepare_allsstar(metadata_csv_loc = "data/l1res.csv",
+                 stoi_scores_loc="data/stoi_scores.csv",
+                 miknn_scores_loc="data/miknn_scores.csv",
+                 siib_scores_loc="data/siib_scores.csv",
+                 siib_scores_gaussian_loc="data/siib_scores_gaussian.csv",
+                 siib_scores_gaussian_gapped_loc="data/siib_scores_gaussian_gapped.csv")
+```
+
+### Group data by SNR
+```{r group-allsstar-by-snr}
+allsstar_data_per_snr <- allsstar_data %>% group_by(snr) %>% group_split()
+snr_names <- allsstar_data %>% group_by(snr) %>% group_keys() %>% pull(snr)
+names(allsstar_data_per_snr) <- snr_names
+```
+
+### Histograms per group
+```{r hist-group-TODO}
+## TODO: Separate bins for 0, 1
+# Define a function to plot WCR per SNR
+plot_wcr_per_snr <- function(data, snr_name) {
+  ggplot(data, aes(x = sim_wcr)) +
+    geom_histogram(bins=20, fill = "steelblue", color = "white") +
+    labs(
+      title = paste("WCR Distribution for SNR =", snr_name),
+      x = "WCR",
+      y = "Count"
+    )
+}
+
+# Use purrr::walk to generate and save plots for each SNR
+output_dir <- "plots"  # Define output directory
+dir.create(output_dir, showWarnings = FALSE)  # Create directory if not exists
+
+walk2(
+  .x = allsstar_data_per_snr,
+  .y = names(allsstar_data_per_snr),
+  ~ {
+    plot <- plot_wcr_per_snr(.x, .y)
+    ggsave(
+      filename = file.path(output_dir, paste0("WCR_SNR_", .y, ".png")),
+      plot = plot,
+      width = 8,
+      height = 6
+    )
+  }
+)
+```
+
+### Apply BEINF
+```{r beinf}
+
+# Suppose your data frame is `df`, and your response is `y`.
+# We'll assume you have subject IDs in `df$subject`.
+
+# Model formulas for the four parameters:
+#   mu    ~ x + random(...) 
+#   sigma ~ z + random(...)
+#   nu    ~ h + random(...)
+#   tau   ~ k + random(...)
+
+mod <- gamlss(
+  formula = sim_wcr ~ 1, 
+  sigma.formula = ~ 1,
+  nu.formula    = ~ 1,
+  tau.formula   = ~ 1,
+  family = BEINF,         # Beta-inflated family
+  data   = allsstar_data_per_snr[["0"]] %>% na.omit(),
+  method = RS()           # or another fitting method like CG() or mixed()
+)
+
+library(gamlss.dist)  # for dBEINF() if needed
+
+# Extract the fitted (constant) parameters
+mu_est    <- fitted(mod, "mu")[1]
+sigma_est <- fitted(mod, "sigma")[1]
+nu_est    <- fitted(mod, "nu")[1]
+tau_est   <- fitted(mod, "tau")[1]
+
+cat("mu    =", mu_est, "\n")
+cat("sigma =", sigma_est, "\n")
+cat("nu    =", nu_est, "\n")
+cat("tau   =", tau_est, "\n")
+
+
+# 2) Evaluate the continuous PDF over a sequence in (0,1)
+xx <- seq(0, 1, length.out = 200)
+pdf_vals <- dBEINF(xx, mu = mu_est, sigma = sigma_est,
+                        nu = nu_est, tau = tau_est)
+
+# Store in a data frame for ggplot
+pdf_data <- data.frame(x = xx, pdf = pdf_vals)
+
+# 3) Calculate the point masses at 0 and 1
+p0 <- nu_est  / (1 + nu_est + tau_est)  # Probability mass at y = 0
+p1 <- tau_est / (1 + nu_est + tau_est)  # Probability mass at y = 1
+
+# 4) Construct the ggplot
+p <- ggplot(allsstar_data_per_snr[["0"]], aes(x = sim_wcr)) +
+  # Histogram of the data in density scale
+  geom_histogram(#aes(y = ..density..),
+                 aes(y = after_stat(count) / sum(after_stat(count))),
+                bins = 20, boundary = 0, closed = "left", fill = "gray", color = "black") +
+  
+  # Continuous Beta-inflated PDF on (0,1)
+  geom_line(data = pdf_data, aes(x = x, y = pdf),
+            color = "red", size = 1.2) +
+  
+  # Spike at y=0
+  geom_segment(
+    x = 0, y = 0, xend = 0, yend = p0,
+    color = "blue",
+    arrow = arrow(length = unit(0.15, "cm"))
+  ) +
+  geom_text(
+    x = 0, y = p0,
+    label = sprintf("p(0)=%.3f", p0),
+    hjust = -0.1, color = "blue"
+  ) +
+  
+  # Spike at y=1
+  geom_segment(
+    x = 1, y = 0, xend = 1, yend = p1,
+    color = "blue",
+    arrow = arrow(length = unit(0.15, "cm"))
+  ) +
+  geom_text(
+    x = 1, y = p1,
+    label = sprintf("p(1)=%.3f", p1),
+    hjust = 1.1, color = "blue"
+  ) +
+  
+  # Ensure x-axis from 0 to 1
+  coord_cartesian(xlim=c(0, 1)) +
+  
+  # Aesthetics
+  theme_minimal() +
+  labs(title = "Beta-Inflated Model Fit",
+       subtitle = "SNR = -2 dB",
+       x = "sim_wcr",
+       y = "Density")
+
+# 5) Print or plot
+print(p)
+```

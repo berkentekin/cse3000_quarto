@@ -1088,6 +1088,18 @@
       ],
       "Hash": "5bfe2927efa9f87766ca9605301ea48f"
     },
+    "pcaPP": {
+      "Package": "pcaPP",
+      "Version": "2.0-5",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "methods",
+        "mvtnorm"
+      ],
+      "Hash": "5e27d30304bd76dc55a9af1ec6959168"
+    },
     "pillar": {
       "Package": "pillar",
       "Version": "1.10.0",
