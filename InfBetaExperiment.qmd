@@ -171,6 +171,9 @@ xx <- seq(0, 1, length.out = 200)
 pdf_vals <- dBEINF(xx, mu = mu_est, sigma = sigma_est,
                         nu = nu_est, tau = tau_est)
 
+plotBEINF(mu = mu_est,sigma = sigma_est,
+                        nu = nu_est, tau = tau_est)
+
 # Store in a data frame for ggplot
 pdf_data <- data.frame(x = xx, pdf = pdf_vals)
 
@@ -181,8 +184,8 @@ p1 <- tau_est / (1 + nu_est + tau_est)  # Probability mass at y = 1
 # 4) Construct the ggplot
 p <- ggplot(allsstar_data_per_snr[["0"]], aes(x = sim_wcr)) +
   # Histogram of the data in density scale
-  geom_histogram(#aes(y = ..density..),
-                 aes(y = after_stat(count) / sum(after_stat(count))),
+  geom_histogram(aes(y = ..density..),
+                 #aes(y = after_stat(count) / sum(after_stat(count))),
                 bins = 20, boundary = 0, closed = "left", fill = "gray", color = "black") +
   
   # Continuous Beta-inflated PDF on (0,1)
