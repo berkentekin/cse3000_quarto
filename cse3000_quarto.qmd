@@ -632,13 +632,15 @@ mc <- data_lis_slice |> group_by(snr) |> count(snr) |> pull(n) |> min()
 data_lis_slice <- data_lis_slice |> group_by(snr) |> slice_sample(n = mc) |> ungroup()
 
 listeners <- data_lis_slice |> pull(id) |> unique() |> sort() |> print()
-dlss <- data_lis_slice |> noq() |> group_by(snr) |> summarise(avg_stoi = mean(stoi_score, na.rm=TRUE), avg_wcr = mean(sim_wcr, na.rm=TRUE), avg_miknn = mean(MIKNNScore2x), avg_siib = mean(siib_score),avg_siibgg = mean(siib_score_gaussian_gapped)) |> ungroup() |> mutate(snr = factor(snr,snr_order)) |>   mutate(
+dlss <- data_lis_slice |> noq() |> group_by(snr) |> summarise(first_stoi = first(stoi_score), avg_stoi = mean(stoi_score, na.rm=TRUE), avg_wcr = mean(sim_wcr, na.rm=TRUE), avg_miknn = mean(MIKNNScore2x), avg_siib = mean(siib_score),avg_siibgg = mean(siib_score_gaussian_gapped)) |> ungroup() |> mutate(snr = factor(snr,snr_order)) |>   mutate(
   
     snr_num = as.numeric(gsub("^n", "-", as.character(snr)))
   )
 
+
 dlss |> ggplot(aes(x=snr_num, y=avg_wcr)) + geom_point()
 dlss |> ggplot(aes(x=snr_num, y=avg_stoi)) + geom_point()
+dlss |> ggplot(aes(x=snr_num, y=first_stoi)) + geom_point()
 dlss |> ggplot(aes(x=snr_num, y=avg_siibgg)) + geom_point()
 dlss |> ggplot(aes(x=snr_num, y=avg_siib)) + geom_point()
 dlss |> ggplot(aes(x=snr_num, y=avg_miknn)) + geom_point()
