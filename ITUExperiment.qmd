@@ -253,6 +253,11 @@ AICc(poly3_stoi_fit, n=14, k=4) # -24.60715
 AICc(dau_stoi_fit, n=14, k=3) # -28.9996
 AICc(logist_stoi_fit, n=14, k=length(coef(logist_stoi_fit))) # -32.2805 best fit
  
+BIC(linear_stoi_fit) # -27.45764
+BIC(poly3_stoi_fit) # -25.85631
+BIC(dau_stoi_fit) # -28.84337
+BIC(logist_stoi_fit) # -31.45423 best fit
+
 
 # Plot the scatter plot and fit line using ggplot2
 ggplot(data_group_by_snr_gender, aes(x = avg_stoi, y = avg_wcr)) +
