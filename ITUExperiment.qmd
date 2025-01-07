@@ -1,0 +1,275 @@
+---
+title: "ITUExperiment"
+format: html
+---
+
+---
+title: "NlsExperiment"
+---
+
+### Install required Libraries
+
+```{r libraries}
+library("tidyverse")
+library("ggpmisc")
+library("pcaPP")
+library("VGAM")
+library("purrr")
+library("MonoPoly")
+library("minpack.lm")
+
+```
+
+### Helper constants, functions and operators
+
+```{r}
+
+snr_order <- c("n4", "n2", "0", "2", "4", "6", "8", "Q")
+
+read_as_tibble <- function(filepath, sep = ",") {
+  read.csv(filepath, sep = sep) %>% as_tibble()
+}
+
+noq <- function(data) {
+  data %>% filter(snr != 'Q')
+}
+
+`%sp%` <- function(df, val) {
+  filter(df, speaker == val)
+}
+
+`%snr%` <- function(df, val) {
+  filter(df, snr == val)
+}
+
+tidier <- function(data) {
+  data <- data %>% noq() %>% mutate(snr = factor(snr,snr_order)) %>% mutate(
+    snr = as.numeric(gsub("^n", "-", as.character(snr))))
+}
+
+richards_start <- c(
+  B = 0.04,
+  M = 0.75,
+  Q = 1
+  
+)
+
+logistic_taal10 <- function(d, a, b) {
+  1 / (1 + exp(a * d + b))
+}
+
+dau_taal10 <- function(d, a, b, c) {
+  1 / (1 + (a*d + b)^ c)
+}
+```
+
+### Read observations for ALLSSTAR
+
+```{r csv_readers}
+
+
+prepare_allsstar <- function(metadata_csv_loc, ...) {
+  # Helper function to read CSV files and convert them to tibbles
+
+  
+  # Gather the additional score file paths
+  scores <- list(...)
+  
+  # Read the input files
+  l1_data <- read_as_tibble(metadata_csv_loc, sep = ";")
+  l1_stoi_scores <- read_as_tibble(scores[["stoi_scores_loc"]])
+  l1_miknn_scores <- read_as_tibble(scores[["miknn_scores_loc"]])
+  l1_siib_scores <- read_as_tibble(scores[["siib_scores_loc"]])
+  l1_siib_scores_gaussian <- read_as_tibble(scores[["siib_scores_gaussian_loc"]])
+  l1_siib_scores_gaussian_gapped <- read_as_tibble(scores[["siib_scores_gaussian_gapped_loc"]])
+  
+  # Merge all data
+  allsstar_data <- l1_data %>%
+    merge(l1_stoi_scores, by.x = c("audio", "snr"), by.y = c("filename", "snr"), all.x = TRUE) %>%
+    merge(l1_miknn_scores, by.x = c("audio", "snr"), by.y = c("CleanFile", "Degradation"), all.x = TRUE) %>%
+    merge(l1_siib_scores, by.x = c("audio", "snr"), by.y = c("filename", "snr"), all.x = TRUE) %>%
+    merge(l1_siib_scores_gaussian, by.x = c("audio", "snr"), by.y = c("filename", "snr"), all.x = TRUE) %>%
+    merge(l1_siib_scores_gaussian_gapped, by.x = c("audio", "snr"), by.y = c("filename", "snr"), all.x = TRUE)
+  
+  # Perform additional transformations
+  allsstar_data <- allsstar_data %>% tidier() %>%
+    rename(stoi_score = score) %>%
+    #filter(trial > 3) %>%
+    replace_na(list(stoi_score = 1)) %>%
+    mutate(sim_wcr = autoscore / numwords) %>%
+    mutate(parent_filename = sub("_S[0-9]+$", "", audio))
+  
+  # Return the final data
+  return(allsstar_data)
+}
+
+```
+
+```{r create-allsstar-df}
+allsstar_data <- prepare_allsstar(metadata_csv_loc = "data/l1res.csv",
+                 stoi_scores_loc="data/stoi_scores.csv",
+                 miknn_scores_loc="data/miknn_scores.csv",
+                 siib_scores_loc="data/siib_scores.csv",
+                 siib_scores_gaussian_loc="data/siib_scores_gaussian.csv",
+                 siib_scores_gaussian_gapped_loc="data/siib_scores_gaussian_gapped.csv")
+```
+
+```{r}
+
+adj_first_formula <- function(data, wcr) {
+  
+  calc_ab <- function(data, wcr, oim) {
+    N <- nrow(data)
+    mult <- data[[{wcr}]] * data[[{oim}]]
+    b1 <- N * sum(mult) - sum(data[[{wcr}]]) * sum(data[[{oim}]])
+    b2 <- N * sum(data[[{wcr}]]^2) - sum(data[[{wcr}]])^2
+    b <- b1 / b2 # slope
+    a <- (sum(data[[{oim}]]) - b * sum(data[[{wcr}]])) / N # intercept
+    
+    return(list(a = a, b = b))
+  }
+  
+  stoi_ab <- data %>% calc_ab(wcr, 'avg_stoi')
+  miknn_ab <- data %>% calc_ab(wcr, 'avg_miknn')
+  print(stoi_ab)
+  
+  data <- data %>% mutate(adj_stoi_wcr = stoi_ab$a + stoi_ab$b * .[[{wcr}]],
+                      adj_miknn_wcr = miknn_ab$a + miknn_ab$b * .[[{wcr}]]    )
+
+}
+
+ad_grp_snr_gender <- allsstar_data %>% group_by(snr, gender) %>% summarise(avg_wcr=mean(sim_wcr), avg_stoi = mean(stoi_score),  avg_siib=mean(siib_score_gaussian_gapped), avg_miknn=mean(MIKNNScore2x), .groups = "drop")
+
+ad_grp_adj_snr_gender <- ad_grp_snr_gender %>% adj_first_formula('avg_wcr')
+
+ggplot(data=ad_grp_adj_snr_gender, aes(x=avg_miknn, y=adj_miknn_wcr, color=snr)) + geom_point()
+```
+
+```{r}
+
+adj_first_formula <- function(data, wcr, outcome_vars) {
+  
+  # Helper function to calculate intercept (a) and slope (b)
+  calc_ab <- function(data, wcr, outcome_var) {
+    N <- nrow(data)
+    mult <- data[[wcr]] * data[[outcome_var]]
+    b1 <- N * sum(mult) - sum(data[[wcr]]) * sum(data[[outcome_var]])
+    b2 <- N * sum(data[[wcr]]^2) - sum(data[[wcr]])^2
+    b <- b1 / b2  # slope
+    a <- (sum(data[[outcome_var]]) - b * sum(data[[wcr]])) / N  # intercept
+    
+    return(data.frame(outcome_var = outcome_var, a = a, b = b))
+  }
+  
+  # Calculate a and b for each outcome variable and combine into a dataframe
+  ab_df <- purrr::map_dfr(outcome_vars, ~calc_ab(data, wcr, .x))
+  
+  # Adjust the data with calculated intercept and slope for each variable
+  for (var in outcome_vars) {
+    coefs <- ab_df %>% filter(outcome_var == var)
+    print(coefs)
+    data <- data %>% mutate(!!paste0("adj_", var, "_", wcr) := coefs$a + coefs$b * .[[wcr]])
+  }
+  
+  return(data)
+}
+
+# Example Usage
+ad_grp_snr_gender_2 <- allsstar_data %>%
+  group_by(snr, gender) %>%
+  summarise(
+    avg_wcr = mean(sim_wcr),
+    avg_stoi = mean(stoi_score),
+    avg_siib = mean(siib_score_gaussian_gapped),
+    avg_miknn = mean(MIKNNScore2x),
+    .groups = "drop"
+  )
+
+
+fit_stoi <- lm(formula=avg_stoi ~ avg_wcr, data=ad_grp_adj_snr_gender_2)
+fit_miknn <- lm(formula=avg_siib ~ avg_wcr, data=ad_grp_adj_snr_gender_2)
+fit_siib <- lm(formula=avg_miknn ~ avg_wcr, data=ad_grp_adj_snr_gender_2)
+
+stoi_coefs <- coef(fit_stoi)
+miknn_coefs <- coef(fit_miknn)
+siib_coefs <- coef(fit_siib)
+
+all_coefs <- rbind(stoi_coefs, miknn_coefs, siib_coefs)
+colnames(all_coefs) <- c('a', 'b')
+
+all_coefs
+
+names(cs) <- c('a', 'b') # a: Intercept, b: slope
+
+ad_grp_adj_snr_gender_2 <- ad_grp_adj_snr_gender_2 %>% mutate(new_wcr = cs[['a']] + avg_wcr * cs[['b']])
+
+summary(fit)
+# Apply the updated function
+outcome_vars <- c("avg_stoi", "avg_miknn", "avg_siib")
+ad_grp_adj_snr_gender_2 <- ad_grp_adj_snr_gender_2 %>% adj_first_formula("avg_wcr", outcome_vars)
+
+# Visualization
+ggplot(data = ad_grp_adj_snr_gender_2, aes(x = avg_stoi, y = new_wcr, color = snr)) +
+  geom_point()
+```
+
+```{r}
+
+AICc <- function(fit, n, k) {
+  AIC(fit) +  (2*(k^2) + 2*k) / (n - k - 1)
+}
+
+# Example Usage
+data_group_by_snr_gender <- allsstar_data %>%
+  group_by(snr, gender) %>%
+  summarise(
+    avg_wcr = mean(sim_wcr),
+    avg_stoi = mean(stoi_score),
+    avg_siib = mean(siib_score_gaussian_gapped),
+    avg_miknn = mean(MIKNNScore2x),
+    .groups = "drop"
+  )
+
+linear_stoi_fit <- lm(data=data_group_by_snr_gender, formula=avg_wcr ~ avg_stoi)
+
+poly3_stoi_fit <- MonoPoly::monpol(formula = avg_wcr ~ avg_stoi, data= data_group_by_snr_gender, degree = 3)
+
+dau_stoi_fit <- nlsLM(avg_wcr ~ dau_taal10(avg_stoi, a, b, c), data = data_group_by_snr_gender, start=c(a=0,b=1,c=0.5))
+
+logist_stoi_fit <- nls(avg_wcr ~ logist_taal2010_stoi(avg_stoi, a, b), data = data_group_by_snr_gender, start=c(a=0,b=0.5))
+
+summary(dau_stoi)
+
+data_group_by_snr_gender <- data_group_by_snr_gender %>%
+  mutate(poly3_stoi_fit = predict(poly3_stoi_fit, newdata = data_group_by_snr_gender),
+         dau_stoi_fit = predict(dau_stoi_fit, newdata = data_group_by_snr_gender),
+         linear_stoi_fit = predict(linear_stoi_fit, newdata = data_group_by_snr_gender),
+         logist_stoi_fit = predict(logist_stoi_fit, newdata = data_group_by_snr_gender))
+
+
+
+AICc(linear_stoi_fit, n=14, k=2) # Converges to AIC -28.2839
+AICc(poly3_stoi_fit, n=14, k=4) # -24.60715
+AICc(dau_stoi_fit, n=14, k=3) # -28.9996
+AICc(logist_stoi_fit, n=14, k=length(coef(logist_stoi_fit))) # -32.2805 best fit
+ 
+
+# Plot the scatter plot and fit line using ggplot2
+ggplot(data_group_by_snr_gender, aes(x = avg_stoi, y = avg_wcr)) +
+  geom_point(color = "blue", size = 2) +
+  geom_line(aes(y = poly3_stoi_fit), color = "red", linewidth = 1) +
+  geom_line(aes(y = dau_stoi_fit), color = "brown", linewidth = 1) +
+  geom_line(aes(y = linear_stoi_fit), color = "green", linewidth = 1) +
+  geom_line(aes(y = logist_stoi_fit), color = "purple", linewidth = 1) +
+  labs(
+    title = "Varoius fits on data grouped by SNR and Gender",
+    x = "Average STOI",
+    y = "Average WCR"
+  )
+
+
+
+summary(new_stoi_fit)
+newest_stoi_fit
+
+```

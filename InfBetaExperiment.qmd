@@ -10,7 +10,6 @@ library("ggpmisc")
 library("pcaPP")
 library("gamlss")
 library("gamlss.dist")
-library("gamlss.random")
 library("VGAM")
 library("purrr")
 ```
@@ -34,12 +33,7 @@ tidier <- function(data) {
     snr = as.numeric(gsub("^n", "-", as.character(snr))))
 }
 ```
-### Zero and one inflated Beta Distribution (Hu et al., 2015)
-```{r beinf}
 
-
-
-```
 ### Read observations for ALLSSTAR
 
 ```{r csv_readers}
@@ -73,7 +67,8 @@ prepare_allsstar <- function(metadata_csv_loc, ...) {
     rename(stoi_score = score) %>%
     filter(trial > 3) %>%
     replace_na(list(stoi_score = 1)) %>%
-    mutate(sim_wcr = autoscore / numwords) # Ensure autoscore and numwords exist
+    mutate(sim_wcr = autoscore / numwords) %>%
+    mutate(parent_filename = sub("_S[0-9]+$", "", audio))
   
   # Return the final data
   return(allsstar_data)
@@ -94,7 +89,8 @@ allsstar_data <- prepare_allsstar(metadata_csv_loc = "data/l1res.csv",
 ```{r group-allsstar-by-snr}
 allsstar_data_per_snr <- allsstar_data %>% group_by(snr) %>% group_split()
 snr_names <- allsstar_data %>% group_by(snr) %>% group_keys() %>% pull(snr)
-names(allsstar_data_per_snr) <- snr_names
+names(allsstar_data_per_snr) <- snr_names %>% sapply(as.character)
+
 ```
 
 ### Histograms per group
@@ -102,7 +98,7 @@ names(allsstar_data_per_snr) <- snr_names
 ## TODO: Separate bins for 0, 1
 # Define a function to plot WCR per SNR
 plot_wcr_per_snr <- function(data, snr_name) {
-  ggplot(data, aes(x = sim_wcr)) +
+  ggplot({{data}}, aes(x = sim_wcr)) +
     geom_histogram(bins=20, fill = "steelblue", color = "white") +
     labs(
       title = paste("WCR Distribution for SNR =", snr_name),
@@ -141,30 +137,76 @@ walk2(
 #   sigma ~ z + random(...)
 #   nu    ~ h + random(...)
 #   tau   ~ k + random(...)
+all_snrs <- sapply(seq(-4,8,2), as.character)
 
-mod <- gamlss(
-  formula = sim_wcr ~ 1, 
-  sigma.formula = ~ 1,
-  nu.formula    = ~ 1,
-  tau.formula   = ~ 1,
-  family = BEINF,         # Beta-inflated family
-  data   = allsstar_data_per_snr[["0"]] %>% na.omit(),
-  method = RS()           # or another fitting method like CG() or mixed()
-)
+
+mods <- list()
+for (s in all_snrs) {
+  mod <- gamlss(
+    formula       = sim_wcr ~ snr, 
+    sigma.formula = ~ snr,
+    nu.formula    = ~ snr,
+    tau.formula   = ~ snr,
+    family        = BEINF,
+    data          = allsstar_data_per_snr[[s]] %>% na.omit(),
+    method        = RS()
+  )
+  
+  mu_est    <- fitted(mod, "mu")[1]
+  sigma_est <- fitted(mod, "sigma")[1]
+  nu_est    <- fitted(mod, "nu")[1]
+  tau_est   <- fitted(mod, "tau")[1]
+  
+    
+  # 2) Evaluate the continuous PDF over a sequence in (0,1)
+  xx <- seq(0, 1, length.out = 200)
+  pdf_vals <- dBEINF(xx, mu = mu_est, sigma = sigma_est,
+                          nu = nu_est, tau = tau_est)
+  
+  plotBEINF(mu = mu_est,sigma = sigma_est,
+                          nu = nu_est, tau = tau_est)
+  
+  # Store in a data frame for ggplot
+  pdf_data <- data.frame(x = xx, pdf = pdf_vals)
+  
+  # 3) Calculate the point masses at 0 and 1
+  mod$p0 <- nu_est  / (1 + nu_est + tau_est)  # Probability mass at y = 0
+  mod$p1 <- tau_est / (1 + nu_est + tau_est)  # Probability mass at y = 1
+  mod$expected <- (1 - mod$p0 - mod$p1) * mu_est + mod$p1
+  mods[[s]] <- mod 
+}
+
+mods_df <- all_snrs %>%
+  map_dfr(~ {
+    # Extract the fitted model from your mods list
+    m <- mods[[.x]]
+
+    tibble(
+      snr       = .x,
+      p0        = m$p0,
+      p1        = m$p1,
+      expected  = m$expected,
+      mu        = fitted(m, "mu")[1],
+      sigma     = fitted(m, "sigma")[1],
+      nu        = fitted(m, "nu")[1],
+      tau       = fitted(m, "tau")[1]
+    )
+  })
+
+coefs <- coef(mod)
 
 library(gamlss.dist)  # for dBEINF() if needed
 
 # Extract the fitted (constant) parameters
-mu_est    <- fitted(mod, "mu")[1]
-sigma_est <- fitted(mod, "sigma")[1]
-nu_est    <- fitted(mod, "nu")[1]
-tau_est   <- fitted(mod, "tau")[1]
+# mu_est    <- fitted(mod, "mu")[1]
+# sigma_est <- fitted(mod, "sigma")[1]
+# nu_est    <- fitted(mod, "nu")[1]
+# tau_est   <- fitted(mod, "tau")[1]
 
-cat("mu    =", mu_est, "\n")
-cat("sigma =", sigma_est, "\n")
-cat("nu    =", nu_est, "\n")
-cat("tau   =", tau_est, "\n")
-
+# cat("mu    =", mu_est, "\n")
+# cat("sigma =", sigma_est, "\n")
+# cat("nu    =", nu_est, "\n")
+# cat("tau   =", tau_est, "\n")
 
 # 2) Evaluate the continuous PDF over a sequence in (0,1)
 xx <- seq(0, 1, length.out = 200)
@@ -184,13 +226,13 @@ p1 <- tau_est / (1 + nu_est + tau_est)  # Probability mass at y = 1
 # 4) Construct the ggplot
 p <- ggplot(allsstar_data_per_snr[["0"]], aes(x = sim_wcr)) +
   # Histogram of the data in density scale
-  geom_histogram(aes(y = ..density..),
+  geom_histogram(aes(y = after_stat(density)),
                  #aes(y = after_stat(count) / sum(after_stat(count))),
                 bins = 20, boundary = 0, closed = "left", fill = "gray", color = "black") +
   
   # Continuous Beta-inflated PDF on (0,1)
   geom_line(data = pdf_data, aes(x = x, y = pdf),
-            color = "red", size = 1.2) +
+            color = "red", linewidth = 1.2) +
   
   # Spike at y=0
   geom_segment(
@@ -228,4 +270,37 @@ p <- ggplot(allsstar_data_per_snr[["0"]], aes(x = sim_wcr)) +
 
 # 5) Print or plot
 print(p)
+```
+
+
+### Scratchpad
+```{r}
+
+allsstar_data <- allsstar_data %>%
+  mutate(audio_snr = paste(audio, snr, sep = "_"), hint_sentid = paste(hint, sentid, sep="_"), hint_sentid_snr = paste(hint, sentid, snr, sep="_"), aus = paste(audio, speaker, sep="_"))  # Combine audio and snr
+allsstar_data_s <- allsstar_data %>% group_by(hint_sentid) %>% slice_head(n = 2)
+
+ggplot(
+  data = allsstar_data_s,
+  aes(
+    x = snr,
+    y = MIKNNScore2x,
+    color = speaker,
+    group = speaker
+  )
+) +
+  geom_point(size = 2) +                 # Scatter points
+  geom_line(size = 2, alpha = 0.7) +     # Lines connecting points for each audio
+  scale_x_continuous(breaks = unique(allsstar_data_s$snr)) +
+  labs(
+    title = "STOI Scores vs. SNR Levels (Grouped by Audio)",
+    x = "SNR (dB)",
+    y = "STOI Score",
+    color = "Audio"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",           # Optionally hide legend if too cluttered
+  )
+
 ```

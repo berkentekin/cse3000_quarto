@@ -486,8 +486,11 @@ t_vals_avg_df <- do.call(rbind, t_vals_avg)
 residual_stderrs_avg_df <- do.call(rbind, residual_stderrs_avg)
 
 # Convert to tibble for easier handling
+t_vals_tibble <- as_tibble(t_vals_df)
 t_vals_avg_tibble <- as_tibble(t_vals_avg_df)
+std_errs_tibble <- as_tibble(std_errs_df)
 std_errs_avg_tibble <- as_tibble(std_errs_avg_df)
+residual_stderrs_tibble <- as_tibble(residual_stderrs_df)
 residual_stderrs_avg_tibble <- as_tibble(residual_stderrs_avg_df)
 # Display results
 print("Standard Errors across iterations:")
@@ -607,9 +610,6 @@ ggplot(residual_stderrs_avg_tibble, aes(x = ID, y = residual_stderr)) +
 
 ```
 
-
-
-
 ### Experiment 1
 
 ```{r exp-1}
@@ -632,7 +632,7 @@ mc <- data_lis_slice |> group_by(snr) |> count(snr) |> pull(n) |> min()
 data_lis_slice <- data_lis_slice |> group_by(snr) |> slice_sample(n = mc) |> ungroup()
 
 listeners <- data_lis_slice |> pull(id) |> unique() |> sort() |> print()
-dlss <- data_lis_slice |> noq() |> group_by(snr) |> summarise(first_stoi = first(stoi_score), avg_stoi = mean(stoi_score, na.rm=TRUE), avg_wcr = mean(sim_wcr, na.rm=TRUE), avg_miknn = mean(MIKNNScore2x), avg_siib = mean(siib_score),avg_siibgg = mean(siib_score_gaussian_gapped)) |> ungroup() |> mutate(snr = factor(snr,snr_order)) |>   mutate(
+dlss <- data_lis_slice |> noq() |> group_by(snr, gender) |> summarise(first_stoi = first(stoi_score), avg_stoi = mean(stoi_score, na.rm=TRUE), avg_wcr = mean(sim_wcr, na.rm=TRUE), avg_miknn = mean(MIKNNScore2x), avg_siib = mean(siib_score),avg_siibgg = mean(siib_score_gaussian_gapped)) |> ungroup() |> mutate(snr = factor(snr,snr_order)) |>   mutate(
   
     snr_num = as.numeric(gsub("^n", "-", as.character(snr)))
   )
@@ -705,15 +705,6 @@ tidier <- function(data) {
 }
 
 data <- all_data %>% tidier()
-data_grouped_by_id_mix_snr <- data %>% 
-  group_by(id) %>% 
-  summarise(avg_wcr = mean(sim_wcr), 
-            avg_stoi_score = mean(stoi_score), 
-            avg_miknn_score = mean(MIKNNScore2x),
-            avg_siib_score = mean(siib_score),
-            avg_siib_score_gaussian_gapped = mean(siib_score_gaussian_gapped),
-            .groups="drop") %>% 
-  mutate(snr = as_factor(snr))
 
 data_grouped_by_id <- data %>% 
   group_by(id, snr) %>% 
@@ -722,6 +713,7 @@ data_grouped_by_id <- data %>%
             avg_miknn_score = mean(MIKNNScore2x),
             avg_siib_score = mean(siib_score),
             avg_siib_score_gaussian_gapped = mean(siib_score_gaussian_gapped),
+            avg_editdist = mean(sim_editdist),
             .groups="drop") %>% 
   mutate(snr = as_factor(snr))
 
@@ -736,7 +728,13 @@ stoi_grid <- tibble(
   avg_stoi_score = seq(0,1,length.out=200)
 ) %>% mutate(avg_wcr_pred = predict(best_fit_lt2010, newdata = .))
 
-ggplot(data=data_grouped_by_id, mapping = aes(x = avg_stoi_score, y = avg_wcr, color = snr)) + geom_point() +geom_line(data=stoi_grid, aes(x=avg_stoi_score, y=avg_wcr_pred), color="blue", linewidth=1)
+data_grouped_by_id <- data_grouped_by_id %>% mutate(id = as.factor(id))
+
+
+
+
+ggplot(data=data_grouped_by_id %>% sample_n(10), mapping = aes(x = avg_stoi_score, y = avg_wcr, color = snr)) + geom_point() +geom_line(data=stoi_grid, aes(x=avg_stoi_score, y=avg_wcr_pred), color="blue", linewidth=1)
+ggplot(data=data_grouped_by_id, mapping = aes(x = snr, y = avg_wcr, color = id, group=id)) + geom_point() + geom_line() + theme(legend.position = "none")
 ggplot(data=data_grouped_by_id, mapping = aes(x = avg_miknn_score, y = avg_wcr, color = snr)) + geom_point()
 ggplot(data=data_grouped_by_id, mapping = aes(x = avg_siib_score, y = avg_wcr, color = snr)) + geom_point()
 ggplot(data=data_grouped_by_id, mapping = aes(x = avg_siib_score_gaussian_gapped, y = avg_wcr, color = snr)) + geom_point()
@@ -825,5 +823,30 @@ p + geom_point() + labs(x="MIKNN Score", y="Subjective Score (WCR)", color="SNR"
 
 ```{r}
 
+some_ids <- data_grouped_by_id %>% ungroup() %>%
+  distinct(id) %>% 
+  slice_sample(n=5)   # 1% of unique IDs
+
+# 2. Filter the data to keep only the sampled IDs
+data_1pct <- data_grouped_by_id %>%
+  filter(id %in% some_ids$id)
+
+# 3. Plot avg_wcr vs. snr for the sampled IDs
+ggplot(data_1pct, aes(x = snr, y = avg_wcr, color = id, group = id)) +
+  geom_point() +
+  geom_line() +
+  labs(title = "1% of IDs: avg_wcr vs. SNR",
+       x = "SNR",
+       y = "Average WCR") +
+  theme_minimal()
+
+# 3. Plot avg_wcr vs. snr for the sampled IDs
+ggplot(data_1pct, aes(x = snr, y = avg_editdist, color = id, group = id)) +
+  geom_point() +
+  geom_line() +
+  labs(title = "1% of IDs: avg_editdist vs. SNR",
+       x = "SNR",
+       y = "Average WCR") +
+  theme_minimal()
 
 ```

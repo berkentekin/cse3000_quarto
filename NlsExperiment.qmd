@@ -1,0 +1,163 @@
+---
+title: "NlsExperiment"
+---
+
+### Install required Libraries
+
+```{r libraries}
+library("tidyverse")
+library("ggpmisc")
+library("pcaPP")
+library("VGAM")
+library("purrr")
+```
+
+### Helper constants, functions and operators
+
+```{r}
+
+snr_order <- c("n4", "n2", "0", "2", "4", "6", "8", "Q")
+
+read_as_tibble <- function(filepath, sep = ",") {
+  read.csv(filepath, sep = sep) %>% as_tibble()
+}
+
+noq <- function(data) {
+  data %>% filter(snr != 'Q')
+}
+
+`%sp%` <- function(df, val) {
+  filter(df, speaker == val)
+}
+
+`%snr%` <- function(df, val) {
+  filter(df, snr == val)
+}
+
+tidier <- function(data) {
+  data <- data %>% noq() %>% mutate(snr = factor(snr,snr_order)) %>% mutate(
+    snr = as.numeric(gsub("^n", "-", as.character(snr))))
+}
+
+richards_start <- c(
+  B = 0.04,
+  M = 0.75,
+  Q = 1
+  
+)
+richards <- function(x, B, M, Q) {
+  0.5 + (0.92 - 0.5) / ((1 + Q * exp(-B * (x - M)))^(5))
+}
+```
+
+### Read observations for ALLSSTAR
+
+```{r csv_readers}
+
+
+prepare_allsstar <- function(metadata_csv_loc, ...) {
+  # Helper function to read CSV files and convert them to tibbles
+
+  
+  # Gather the additional score file paths
+  scores <- list(...)
+  
+  # Read the input files
+  l1_data <- read_as_tibble(metadata_csv_loc, sep = ";")
+  l1_stoi_scores <- read_as_tibble(scores[["stoi_scores_loc"]])
+  l1_miknn_scores <- read_as_tibble(scores[["miknn_scores_loc"]])
+  l1_siib_scores <- read_as_tibble(scores[["siib_scores_loc"]])
+  l1_siib_scores_gaussian <- read_as_tibble(scores[["siib_scores_gaussian_loc"]])
+  l1_siib_scores_gaussian_gapped <- read_as_tibble(scores[["siib_scores_gaussian_gapped_loc"]])
+  
+  # Merge all data
+  allsstar_data <- l1_data %>%
+    merge(l1_stoi_scores, by.x = c("audio", "snr"), by.y = c("filename", "snr"), all.x = TRUE) %>%
+    merge(l1_miknn_scores, by.x = c("audio", "snr"), by.y = c("CleanFile", "Degradation"), all.x = TRUE) %>%
+    merge(l1_siib_scores, by.x = c("audio", "snr"), by.y = c("filename", "snr"), all.x = TRUE) %>%
+    merge(l1_siib_scores_gaussian, by.x = c("audio", "snr"), by.y = c("filename", "snr"), all.x = TRUE) %>%
+    merge(l1_siib_scores_gaussian_gapped, by.x = c("audio", "snr"), by.y = c("filename", "snr"), all.x = TRUE)
+  
+  # Perform additional transformations
+  allsstar_data <- allsstar_data %>% tidier() %>%
+    rename(stoi_score = score) %>%
+    #filter(trial > 3) %>%
+    replace_na(list(stoi_score = 1)) %>%
+    mutate(sim_wcr = autoscore / numwords) %>%
+    mutate(parent_filename = sub("_S[0-9]+$", "", audio))
+  
+  # Return the final data
+  return(allsstar_data)
+}
+
+```
+
+```{r create-allsstar-df}
+allsstar_data <- prepare_allsstar(metadata_csv_loc = "data/l1res.csv",
+                 stoi_scores_loc="data/stoi_scores.csv",
+                 miknn_scores_loc="data/miknn_scores.csv",
+                 siib_scores_loc="data/siib_scores.csv",
+                 siib_scores_gaussian_loc="data/siib_scores_gaussian.csv",
+                 siib_scores_gaussian_gapped_loc="data/siib_scores_gaussian_gapped.csv")
+```
+
+### Group data by ID per SNR
+
+```{r group-allsstar-by-id} 
+allsstar_data_grouped_by_id <- allsstar_data %>% 
+  group_by(id, snr) %>% 
+  summarise(avg_wcr = mean(sim_wcr), 
+            avg_stoi_score = mean(stoi_score), 
+            avg_miknn_score = mean(MIKNNScore2x), 
+            avg_siib_score = mean(siib_score), 
+            avg_siib_score_gaussian_gapped = mean(siib_score_gaussian_gapped),
+            gender = first(gender),
+            speaker = mean(speaker),
+            parent_filename = first(parent_filename), .groups="drop") %>% 
+  mutate(snr = as_factor(snr))
+
+merge_group_metrics <- function(data, ...) {
+  scores <- list(...)
+  l1_siib_scores_gaussian_grouped <- read_as_tibble(scores[["siib_scores_gaussian_grouped_loc"]])
+  l1_stoi_scores_grouped <- read_as_tibble(scores[["stoi_scores_grouped_loc"]])
+  
+  # Merge all data
+  allsstar_data <- data %>%
+    merge(l1_stoi_scores_grouped, by.x = c("parent_filename", "snr"), by.y = c("filename", "snr"), all.x = TRUE) %>%
+    merge(l1_siib_scores_gaussian_grouped, by.x = c("parent_filename", "snr"), by.y = c("filename", "snr"), all.x = TRUE)
+  
+}
+
+allsstar_data_grouped_by_id <- merge_group_metrics(data=allsstar_data_grouped_by_id, stoi_scores_grouped_loc="data/stoi_scores_grouped.csv",
+                    siib_scores_gaussian_grouped_loc = "data/siib_scores_gaussian_grouped.csv")
+
+  ggplot(data = allsstar_data_grouped_by_id, aes(x=snr, y=avg_stoi_score, group=id, color=id))+geom_point()+ geom_line() + theme(legend.position = "none")
+```
+
+# Kolmogorov-Smirnov Tests on different slices
+```{r ks}
+data_male <- allsstar_data_grouped_by_id %>% filter(gender == 0)
+data_female <- allsstar_data_grouped_by_id %>% filter(gender == 1)
+
+data_male_f1 <- data_male %>% sample_n(100)
+data_female_f1 <- data_female %>% sample_n(100)
+
+data_f1 <- allsstar_data_grouped_by_id %>% sample_frac(0.05)
+#data_f2 <- data_s2 <- anti_join(allsstar_data_grouped_by_id, data_f1)
+data_f3 <- allsstar_data_grouped_by_id %>% sample_frac(0.05)
+
+data_s49 <- allsstar_data_grouped_by_id %sp% 49
+data_s54 <- allsstar_data_grouped_by_id %sp% 60
+
+ggplot(data=data_s54, aes(x=stoi_score_grouped, y=avg_wcr, group=id, color=snr)) + geom_point() + geom_line() + theme(legend.position = "none")
+
+ks.test(x=data_male$avg_wcr, y=data_female$avg_wcr) # D = 0.16132, p-value = 3.584e-10
+ks.test(x=data_male_f1$avg_wcr, y=data_female_f1$avg_wcr) # D = 0.23577, p-value = 0.1391
+ks.test(x=data_f1$avg_wcr, y=data_f3$avg_wcr) # D = 0.068182, p-value = 0.9771
+ks.test(x=data_s49$avg_wcr, y=data_s54$avg_wcr) # D = 0.32857, p-value = 0.0008329
+ks.test(x=data_f1$avg_stoi_score, y=data_f1$stoi_score_grouped) # D = 0.090909, p-value = 0.8528
+ks.test(x=allsstar_data_grouped_by_id$avg_stoi_score, y=allsstar_data_grouped_by_id$stoi_score_grouped) # D = 0.074286, p-value = 0.0001279
+
+
+
+```
