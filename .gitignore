@@ -11,6 +11,8 @@ data/*.txt
 plots/
 data/*.csv
 *.html
+*.pdf
+ITUExperiment_files/
 data.rar
 .DS_Store
 *.{jpg,png}

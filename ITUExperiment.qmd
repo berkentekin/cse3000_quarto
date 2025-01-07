@@ -1,10 +1,10 @@
 ---
 title: "ITUExperiment"
-format: html
+format: pdf
 ---
 
 ---
-title: "NlsExperiment"
+title: "ITUExperiment"
 ---
 
 ### Install required Libraries
@@ -321,12 +321,13 @@ ggplot(data_group_by_snr_gender, aes(x = avg_miknn, y = avg_wcr)) +
   geom_line(aes(y = logist_miknn_fit), color = "purple", linewidth = 1) +
   labs(
     title = "Varoius fits on data grouped by SNR and Gender",
-    x = "Average STOI",
+    x = "Average MIKNN",
     y = "Average WCR"
   )
 
 
 ```
+
 ```{r siib}
 
 
