@@ -186,31 +186,17 @@ ad_grp_snr_gender_2 <- allsstar_data %>%
   )
 
 
-fit_stoi <- lm(formula=avg_stoi ~ avg_wcr, data=ad_grp_adj_snr_gender_2)
-fit_miknn <- lm(formula=avg_siib ~ avg_wcr, data=ad_grp_adj_snr_gender_2)
-fit_siib <- lm(formula=avg_miknn ~ avg_wcr, data=ad_grp_adj_snr_gender_2)
+fit_stoi <- lm(formula=avg_stoi ~ avg_wcr, data=ad_grp_snr_gender_2)
+fit_miknn <- lm(formula=avg_siib ~ avg_wcr, data=ad_grp_snr_gender_2)
+fit_siib <- lm(formula=avg_miknn ~ avg_wcr, data=ad_grp_snr_gender_2)
 
 stoi_coefs <- coef(fit_stoi)
 miknn_coefs <- coef(fit_miknn)
 siib_coefs <- coef(fit_siib)
 
 all_coefs <- rbind(stoi_coefs, miknn_coefs, siib_coefs)
-colnames(all_coefs) <- c('a', 'b')
+colnames(all_coefs) <- c('a', 'b') # a: Intercept, b: slope
 
-all_coefs
-
-names(cs) <- c('a', 'b') # a: Intercept, b: slope
-
-ad_grp_adj_snr_gender_2 <- ad_grp_adj_snr_gender_2 %>% mutate(new_wcr = cs[['a']] + avg_wcr * cs[['b']])
-
-summary(fit)
-# Apply the updated function
-outcome_vars <- c("avg_stoi", "avg_miknn", "avg_siib")
-ad_grp_adj_snr_gender_2 <- ad_grp_adj_snr_gender_2 %>% adj_first_formula("avg_wcr", outcome_vars)
-
-# Visualization
-ggplot(data = ad_grp_adj_snr_gender_2, aes(x = avg_stoi, y = new_wcr, color = snr)) +
-  geom_point()
 ```
 
 ```{r}
@@ -231,14 +217,17 @@ data_group_by_snr_gender <- allsstar_data %>%
   )
 
 linear_stoi_fit <- lm(data=data_group_by_snr_gender, formula=avg_wcr ~ avg_stoi)
-
 poly3_stoi_fit <- MonoPoly::monpol(formula = avg_wcr ~ avg_stoi, data= data_group_by_snr_gender, degree = 3)
-
 dau_stoi_fit <- nlsLM(avg_wcr ~ dau_taal10(avg_stoi, a, b, c), data = data_group_by_snr_gender, start=c(a=0,b=1,c=0.5))
+logist_stoi_fit <- nls(avg_wcr ~ logistic_taal10(avg_stoi, a, b), data = data_group_by_snr_gender, start=c(a=0,b=0.5))
 
-logist_stoi_fit <- nls(avg_wcr ~ logist_taal2010_stoi(avg_stoi, a, b), data = data_group_by_snr_gender, start=c(a=0,b=0.5))
+summary(linear_stoi_fit)
+summary(poly3_stoi_fit)
+summary(dau_stoi_fit)
+summary(logist_stoi_fit)
 
-summary(dau_stoi)
+
+
 
 data_group_by_snr_gender <- data_group_by_snr_gender %>%
   mutate(poly3_stoi_fit = predict(poly3_stoi_fit, newdata = data_group_by_snr_gender),
@@ -273,8 +262,130 @@ ggplot(data_group_by_snr_gender, aes(x = avg_stoi, y = avg_wcr)) +
   )
 
 
+```
 
-summary(new_stoi_fit)
-newest_stoi_fit
+```{r miknn}
+
+
+# Example Usage
+data_group_by_snr_gender <- allsstar_data %>%
+  group_by(snr, gender) %>%
+  summarise(
+    avg_wcr = mean(sim_wcr),
+    avg_stoi = mean(stoi_score),
+    avg_siib = mean(siib_score_gaussian_gapped),
+    avg_miknn = mean(MIKNNScore2x),
+    .groups = "drop"
+  )
+
+linear_miknn_fit <- lm(data=data_group_by_snr_gender, formula=avg_wcr ~ avg_miknn)
+poly3_miknn_fit <- MonoPoly::monpol(formula = avg_wcr ~ avg_miknn, data= data_group_by_snr_gender, degree = 3)
+dau_miknn_fit <- nlsLM(avg_wcr ~ dau_taal10(avg_miknn, a, b, c), data = data_group_by_snr_gender, start=c(a=0,b=1,c=0.5))
+logist_miknn_fit <- nls(avg_wcr ~ logistic_taal10(avg_miknn, a, b), data = data_group_by_snr_gender, start=c(a=0,b=0.5))
+
+
+summary(linear_miknn_fit)
+summary(poly3_miknn_fit)
+summary(dau_miknn_fit)
+summary(logist_miknn_fit)
+
+
+
+
+data_group_by_snr_gender <- data_group_by_snr_gender %>%
+  mutate(poly3_miknn_fit = predict(poly3_miknn_fit, newdata = data_group_by_snr_gender),
+         dau_miknn_fit = predict(dau_miknn_fit, newdata = data_group_by_snr_gender),
+         linear_miknn_fit = predict(linear_miknn_fit, newdata = data_group_by_snr_gender),
+         logist_miknn_fit = predict(logist_miknn_fit, newdata = data_group_by_snr_gender))
+
+
+
+AICc(linear_miknn_fit, n=14, k=2) # Converges to AIC -28.2839 best fit
+AICc(poly3_miknn_fit, n=14, k=4) # -18.391
+AICc(dau_miknn_fit, n=14, k=3) # -22.7138
+AICc(logist_miknn_fit, n=14, k=length(coef(logist_miknn_fit))) # -25.97967
+
+ 
+BIC(linear_miknn_fit) # -21.8263
+BIC(poly3_miknn_fit) # -19.64016
+BIC(dau_miknn_fit) # -22.55757
+BIC(logist_miknn_fit) # -25.1534 best fit
+ 
+
+# Plot the scatter plot and fit line using ggplot2
+ggplot(data_group_by_snr_gender, aes(x = avg_miknn, y = avg_wcr)) +
+  geom_point(color = "blue", size = 2) +
+  geom_line(aes(y = poly3_miknn_fit), color = "red", linewidth = 1) +
+  geom_line(aes(y = dau_miknn_fit), color = "brown", linewidth = 1) +
+  geom_line(aes(y = linear_miknn_fit), color = "green", linewidth = 1) +
+  geom_line(aes(y = logist_miknn_fit), color = "purple", linewidth = 1) +
+  labs(
+    title = "Varoius fits on data grouped by SNR and Gender",
+    x = "Average STOI",
+    y = "Average WCR"
+  )
+
+
+```
+```{r siib}
+
+
+# Example Usage
+data_group_by_snr_gender <- allsstar_data %>%
+  group_by(snr, gender) %>%
+  summarise(
+    avg_wcr = mean(sim_wcr),
+    avg_stoi = mean(stoi_score),
+    avg_siib = mean(siib_score_gaussian_gapped),
+    avg_miknn = mean(MIKNNScore2x),
+    .groups = "drop"
+  )
+
+linear_siib_fit <- lm(data=data_group_by_snr_gender, formula=avg_wcr ~ avg_siib)
+poly3_siib_fit <- MonoPoly::monpol(formula = avg_wcr ~ avg_siib, data= data_group_by_snr_gender, degree = 3)
+dau_siib_fit <- nlsLM(avg_wcr ~ dau_taal10(avg_siib, a, b, c), data = data_group_by_snr_gender, start=c(a=0,b=1,c=0.5))
+logist_siib_fit <- nls(avg_wcr ~ logistic_taal10(avg_siib, a, b), data = data_group_by_snr_gender, start=c(a=0,b=0.5))
+
+
+summary(linear_siib_fit)
+summary(poly3_siib_fit)
+summary(dau_siib_fit)
+summary(logist_siib_fit)
+
+
+
+
+data_group_by_snr_gender <- data_group_by_snr_gender %>%
+  mutate(poly3_siib_fit = predict(poly3_siib_fit, newdata = data_group_by_snr_gender),
+         dau_siib_fit = predict(dau_siib_fit, newdata = data_group_by_snr_gender),
+         linear_siib_fit = predict(linear_siib_fit, newdata = data_group_by_snr_gender),
+         logist_siib_fit = predict(logist_siib_fit, newdata = data_group_by_snr_gender))
+
+
+
+AICc(linear_siib_fit, n=14, k=2) # Converges to AIC -25.4314 
+AICc(poly3_siib_fit, n=14, k=4) # -40.99456
+AICc(dau_siib_fit, n=14, k=3) # -38.80655
+AICc(logist_siib_fit, n=14, k=length(coef(logist_siib_fit))) # -42.21727 best fit
+
+ 
+BIC(linear_siib_fit) # -24.60514
+BIC(poly3_siib_fit) # -42.24372 best fit
+BIC(dau_siib_fit) # -38.65032
+BIC(logist_siib_fit) # -41.39101 
+ 
+
+# Plot the scatter plot and fit line using ggplot2
+ggplot(data_group_by_snr_gender, aes(x = avg_siib, y = avg_wcr)) +
+  geom_point(color = "blue", size = 2) +
+  geom_line(aes(y = poly3_siib_fit), color = "red", linewidth = 1) +
+  geom_line(aes(y = dau_siib_fit), color = "brown", linewidth = 2) +
+  geom_line(aes(y = linear_siib_fit), color = "green", linewidth = 1) +
+  geom_line(aes(y = logist_siib_fit), color = "purple", linewidth = 1) +
+  labs(
+    title = "Varoius fits on data grouped by SNR and Gender",
+    x = "Average SIIB",
+    y = "Average WCR"
+  )
 
 ```
