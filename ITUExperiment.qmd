@@ -103,6 +103,36 @@ prepare_allsstar <- function(metadata_csv_loc, ...) {
   return(allsstar_data)
 }
 
+prepare_dantale <- function(dantale_data, dantale_conditions, dantale_trials, dantale_oim) {
+  
+  
+  dantale_oim <- dantale_oim %>% mutate(snr = as.numeric(snr), cond = as.numeric(cond), trial = as.numeric(trial))
+
+  dantale_all <- dantale_data %>%
+    merge(dantale_oim, by.x=c("experiment", "cond", "snr_no"), by.y=c("experiment", "cond", "snr"), all.x = TRUE, all.y = TRUE)
+  
+  dantale_all <- dantale_all %>% group_by(experiment,cond, snr) %>% summarise(
+    experiment = first(experiment),
+    across(
+      everything(),
+      ~ mean(.x, na.rm = TRUE),                  # The function to apply
+      .names = "avg_{.col}"                      # How to name the resulting columns
+    )
+  ) %>% merge(
+    dantale_conditions, by.x=c("experiment", "cond"), by.y=c("experiment", "cond")
+  ) %>% mutate(snr = as.factor(snr)) %>%  filter(experiment != 'the_experiment_Training')
+
+}
+
+dantale_data <- read_csv("data/dantale_data.csv")
+dantale_conditions <- read_csv("data/dantale_conditions.csv")
+dantale_trials <- read_csv("data/dantale_trials.csv")
+dantale_oim <- read_csv("data/dantale_results.csv")
+dantale_other <- read_csv("data/dantale_results_other.csv")
+dantale_miknn <- read_csv("data/dantale_results_miknn.csv")
+dantale_oim <- dantale_oim %>% merge(dantale_other) %>% merge(dantale_miknn)
+dantale_all <- prepare_dantale(dantale_data,dantale_conditions, dantale_trials, dantale_oim) 
+
 ```
 
 ```{r create-allsstar-df}
@@ -207,7 +237,7 @@ AICc <- function(fit, n, k) {
 
 # Example Usage
 data_group_by_snr_gender <- allsstar_data %>%
-  group_by(snr, gender) %>%
+  group_by(snr) %>%
   summarise(
     avg_wcr = mean(sim_wcr),
     avg_stoi = mean(stoi_score),
@@ -333,7 +363,7 @@ ggplot(data_group_by_snr_gender, aes(x = avg_miknn, y = avg_wcr)) +
 
 # Example Usage
 data_group_by_snr_gender <- allsstar_data %>%
-  group_by(snr, gender) %>%
+  group_by(snr) %>%
   summarise(
     avg_wcr = mean(sim_wcr),
     avg_stoi = mean(stoi_score),
@@ -364,10 +394,10 @@ data_group_by_snr_gender <- data_group_by_snr_gender %>%
 
 
 
-AICc(linear_siib_fit, n=14, k=2) # Converges to AIC -25.4314 
-AICc(poly3_siib_fit, n=14, k=4) # -40.99456
-AICc(dau_siib_fit, n=14, k=3) # -38.80655
-AICc(logist_siib_fit, n=14, k=length(coef(logist_siib_fit))) # -42.21727 best fit
+AICc(linear_siib_fit, n=7, k=2) # Converges to AIC -25.4314 
+AICc(poly3_siib_fit, n=7, k=4) # -40.99456
+AICc(dau_siib_fit, n=7, k=3) # -38.80655
+AICc(logist_siib_fit, n=7, k=length(coef(logist_siib_fit))) # -42.21727 best fit
 
  
 BIC(linear_siib_fit) # -24.60514
@@ -388,5 +418,755 @@ ggplot(data_group_by_snr_gender, aes(x = avg_siib, y = avg_wcr)) +
     x = "Average SIIB",
     y = "Average WCR"
   )
+
+```
+
+# GPT Magic
+
+```{r allstar-miknn}
+
+library(tidyverse)
+library(MonoPoly)
+library(minpack.lm)
+
+data_group_by_snr_gender <- allsstar_data %>%
+  group_by(snr) %>%
+  summarise(
+    avg_wcr = mean(sim_wcr),
+    avg_stoi = mean(stoi_score),
+    avg_siib = mean(siib_score_gaussian_gapped),
+    avg_miknn = mean(MIKNNScore2x),
+    .groups = "drop"
+  )
+
+# Fit your models as before...
+linear_miknn_fit <- lm(data=data_group_by_snr_gender, formula=avg_wcr ~ avg_miknn)
+poly3_miknn_fit  <- MonoPoly::monpol(formula = avg_wcr ~ avg_miknn, data= data_group_by_snr_gender, degree = 3)
+dau_miknn_fit    <- nlsLM(avg_wcr ~ dau_taal10(avg_miknn, a, b, c),
+                          data = data_group_by_snr_gender,
+                          start=c(a=0,b=1,c=0.5))
+logist_miknn_fit <- nls(avg_wcr ~ logistic_taal10(avg_miknn, a, b),
+                        data = data_group_by_snr_gender,
+                        start=c(a=0,b=0.5))
+
+# Collect predicted values
+data_group_by_snr_gender <- data_group_by_snr_gender %>%
+  mutate(
+    poly3_miknn_fit   = predict(poly3_miknn_fit, newdata = data_group_by_snr_gender),
+    dau_miknn_fit     = predict(dau_miknn_fit,   newdata = data_group_by_snr_gender),
+    linear_miknn_fit  = predict(linear_miknn_fit,newdata = data_group_by_snr_gender),
+    logist_miknn_fit  = predict(logist_miknn_fit,newdata = data_group_by_snr_gender)
+  )
+
+# Compute AICc for each model (or BIC if you prefer):
+AICc_linear <- AICc(linear_miknn_fit,  n=14, k=2)
+AICc_poly3  <- AICc(poly3_miknn_fit,   n=14, k=4)
+AICc_dau    <- AICc(dau_miknn_fit,     n=14, k=3)
+AICc_logist <- AICc(logist_miknn_fit,  n=14, k=length(coef(logist_miknn_fit)))
+
+# Reshape to long format for easier ggplot usage
+plot_data <- data_group_by_snr_gender %>%
+  select(avg_miknn, avg_wcr,
+         poly3_miknn_fit,
+         dau_miknn_fit,
+         linear_miknn_fit,
+         logist_miknn_fit) %>%
+  pivot_longer(
+    cols = c(poly3_miknn_fit, dau_miknn_fit, linear_miknn_fit, logist_miknn_fit),
+    names_to = "model",
+    values_to = "fitted"
+  )
+
+# Now plot with a single geom_line, colored by model
+ggplot(plot_data, aes(x = avg_miknn, y = avg_wcr)) +
+  geom_point(color="blue", size = 2) +
+  geom_line(aes(y = fitted, color = model), size = 1) +
+    scale_y_continuous(
+    name   = "Average WCR (%)",
+    labels = function(x) x * 100
+  ) +
+  # Put the AICc values (or BIC) into the legend labels:
+  scale_color_manual(
+    name = "Model Fit",
+    values = c(
+      "linear_miknn_fit" = "green",
+      "poly3_miknn_fit"  = "red",
+      "dau_miknn_fit"    = "brown",
+      "logist_miknn_fit" = "purple"
+    ),
+    labels = c(
+      "linear_miknn_fit" = paste0("Linear (AICc=", round(AICc_linear, 2), ")"),
+      "poly3_miknn_fit"  = paste0("P.1401 third order poly (AICc=", round(AICc_poly3, 2), ")"),
+      "dau_miknn_fit"    = paste0("DAU Taal10 (AICc=", round(AICc_dau, 2), ")"),
+      "logist_miknn_fit" = paste0("Logistic (AICc=", round(AICc_logist, 2), ")")
+    )
+  ) +
+  labs(
+    title = "Various fits on data grouped by SNR and Gender",
+    x = "Average MIKNN",
+    y = "Average WCR"
+  ) +
+  theme_minimal()
+```
+
+```{r allsstar-stoi}
+library(tidyverse)
+library(MonoPoly)
+library(minpack.lm)
+
+data_group_by_snr_gender <- allsstar_data %>%
+  group_by(snr) %>%
+  summarise(
+    avg_wcr = mean(sim_wcr),
+    avg_stoi = mean(stoi_score),
+    avg_siib = mean(siib_score_gaussian_gapped),
+    avg_miknn = mean(MIKNNScore2x),
+    .groups = "drop"
+  )
+
+# Fit your models as before...
+linear_stoi_fit <- lm(data=data_group_by_snr_gender, formula=avg_wcr ~ avg_stoi)
+poly3_stoi_fit  <- MonoPoly::monpol(formula = avg_wcr ~ avg_stoi, data= data_group_by_snr_gender, degree = 3)
+dau_stoi_fit    <- nlsLM(avg_wcr ~ dau_taal10(avg_stoi, a, b, c),
+                          data = data_group_by_snr_gender,
+                          start=c(a=0,b=1,c=0.5))
+logist_stoi_fit <- nls(avg_wcr ~ logistic_taal10(avg_stoi, a, b),
+                        data = data_group_by_snr_gender,
+                        start=c(a=0,b=0.5))
+
+# Collect predicted values
+data_group_by_snr_gender <- data_group_by_snr_gender %>%
+  mutate(
+    poly3_stoi_fit   = predict(poly3_stoi_fit, newdata = data_group_by_snr_gender),
+    dau_stoi_fit     = predict(dau_stoi_fit,   newdata = data_group_by_snr_gender),
+    linear_stoi_fit  = predict(linear_stoi_fit,newdata = data_group_by_snr_gender),
+    logist_stoi_fit  = predict(logist_stoi_fit,newdata = data_group_by_snr_gender)
+  )
+
+# Compute AICc for each model (or BIC if you prefer):
+AICc_linear <- AICc(linear_stoi_fit,  n=14, k=2)
+AICc_poly3  <- AICc(poly3_stoi_fit,   n=14, k=4)
+AICc_dau    <- AICc(dau_stoi_fit,     n=14, k=3)
+AICc_logist <- AICc(logist_stoi_fit,  n=14, k=length(coef(logist_stoi_fit)))
+
+# Reshape to long format for easier ggplot usage
+plot_data <- data_group_by_snr_gender %>%
+  select(avg_stoi, avg_wcr,
+         poly3_stoi_fit,
+         dau_stoi_fit,
+         linear_stoi_fit,
+         logist_stoi_fit) %>%
+  pivot_longer(
+    cols = c(poly3_stoi_fit, dau_stoi_fit, linear_stoi_fit, logist_stoi_fit),
+    names_to = "model",
+    values_to = "fitted"
+  )
+
+# Now plot with a single geom_line, colored by model
+ggplot(plot_data, aes(x = avg_stoi, y = avg_wcr)) +
+  geom_point(color="blue", size = 2) +
+  geom_line(aes(y = fitted, color = model), size = 1) +
+    scale_y_continuous(
+    name   = "Average WCR (%)",
+    labels = function(x) x * 100
+  ) +
+  # Put the AICc values (or BIC) into the legend labels:
+  scale_color_manual(
+    name = "Model Fit",
+    values = c(
+      "linear_stoi_fit" = "green",
+      "poly3_stoi_fit"  = "red",
+      "dau_stoi_fit"    = "brown",
+      "logist_stoi_fit" = "purple"
+    ),
+    labels = c(
+      "linear_stoi_fit" = paste0("Linear (AICc=", round(AICc_linear, 2), ")"),
+      "poly3_stoi_fit"  = paste0("P.1401 third order poly (AICc=", round(AICc_poly3, 2), ")"),
+      "dau_stoi_fit"    = paste0("DAU Taal10 (AICc=", round(AICc_dau, 2), ")"),
+      "logist_stoi_fit" = paste0("Logistic (AICc=", round(AICc_logist, 2), ")")
+    )
+  ) +
+  labs(
+    title = "Various fits on data grouped by SNR and Gender",
+    x = "Average stoi",
+    y = "Average WCR"
+  ) +
+  theme_minimal()
+```
+# Final_graphs function
+```{r allsstar-siib}
+library(tidyverse)
+library(MonoPoly)
+library(minpack.lm)
+library(LaplacesDemon)
+
+final_graphs <- function(dataset_grouped, n, col_name_string) {
+  
+  # Build a formula from the string, e.g. "avg_siib_gaussian"
+  my_formula <- as.formula(paste("avg_wcr ~", col_name_string))
+  my_poly3_formula <- as.formula(paste("avg_wcr ~ poly(", col_name_string, ", 3, raw=TRUE)"))
+  # Fit models using that formula
+  linear_fit <- lm(data = dataset_grouped, formula = my_formula)
+  
+  poly3_mon_fit  <- monpol(my_formula, data = dataset_grouped, degree = 3)
+  
+  dau_fit    <- nlsLM(
+    as.formula(paste("avg_wcr ~ dau_taal10(", col_name_string, ", a, b, c)")),
+    data  = dataset_grouped,
+    start = c(a = 0, b = 1, c = 0.5)
+  )
+  logist_fit <- nls(
+    as.formula(paste("avg_wcr ~ logistic_taal10(", col_name_string, ", a, b)")),
+    data  = dataset_grouped,
+    start = c(a = 0, b = 0.5)
+  )
+  
+  print(1)
+  poly3_fit <- lm(my_poly3_formula, data = dataset_grouped)  
+  print(1)
+   # Compute RMSE (Root Mean Squared Error)
+  rmse_linear <- sqrt(mean((dataset_grouped$avg_wcr -
+                            predict(linear_fit, newdata = dataset_grouped))^2))
+  rmse_poly3_mon  <- sqrt(mean((dataset_grouped$avg_wcr -
+                            predict(poly3_mon_fit, newdata = dataset_grouped))^2))
+    rmse_poly3  <- sqrt(mean((dataset_grouped$avg_wcr -
+                            predict(poly3_fit, newdata = dataset_grouped))^2))
+  rmse_dau    <- sqrt(mean((dataset_grouped$avg_wcr -
+                            predict(dau_fit, newdata = dataset_grouped))^2))
+  rmse_logist <- sqrt(mean((dataset_grouped$avg_wcr -
+                            predict(logist_fit, newdata = dataset_grouped))^2))
+  
+  AIC_linear <- AIC(linear_fit)
+  AIC_poly3_mon <- AIC(poly3_mon_fit)
+  AIC_dau <- AIC(dau_fit)
+  AIC_logist <- AIC(logist_fit)
+  AIC_poly3 <- AIC(poly3_fit)
+
+
+  # Compute AICc
+  AICc_linear <- AICc(linear_fit,  n = n, k = length(coef(linear_fit)))
+  AICc_poly3_mon  <- AICc(poly3_mon_fit,   n = n, k = length(coef(poly3_mon_fit)))
+  AICc_poly3  <- AICc(poly3_fit,   n = n, k = length(coef(poly3_fit)))
+  AICc_dau    <- AICc(dau_fit,     n = n, k = length(coef(dau_fit)))
+  AICc_logist <- AICc(logist_fit,  n = n, k = length(coef(logist_fit)))
+  
+  min_AICc <- min(c(AICc_linear, AICc_logist, AICc_poly3_mon, AICc_dau))
+    
+  # Create a tibble with labeled columns
+  AICc_df <- tibble(
+    Model = c("Linear", "poly3_mon", "Dau", "Logistic"),
+    AICc = c(AICc_linear, AICc_poly3_mon, AICc_dau, AICc_logist),
+    d_AICc = c(AICc_linear, AICc_poly3_mon, AICc_dau, AICc_logist) - min_AICc
+  ) %>% mutate(d_lik = exp(-d_AICc / 2), d_lik_weigh = d_lik / sum(d_lik))
+  print(AICc_df)
+
+  
+  # Compute PCC
+   pcc_linear  <- cor(dataset_grouped$avg_wcr,
+                     predict(linear_fit, newdata = dataset_grouped))
+  
+  pcc_poly3_mon   <- cor(dataset_grouped$avg_wcr,
+                     predict(poly3_mon_fit, newdata = dataset_grouped))
+   pcc_poly3   <- cor(dataset_grouped$avg_wcr,
+                     predict(poly3_fit, newdata = dataset_grouped)) 
+  pcc_dau     <- cor(dataset_grouped$avg_wcr,
+                     predict(dau_fit, newdata = dataset_grouped))
+  
+  pcc_logist  <- cor(dataset_grouped$avg_wcr,
+                     predict(logist_fit, newdata = dataset_grouped))
+  
+  # Compute Kendall's Tau
+  ktau  <- cor(
+    dataset_grouped$avg_wcr,
+    predict(linear_fit, newdata = dataset_grouped),
+    method = "kendall"
+  )
+  
+  
+  results <- data.frame(
+  Model      = c("Linear", "poly3_mon", "Dau", "Logistic"),
+  RMSE =      c(rmse_linear, rmse_poly3_mon, rmse_dau, rmse_logist),
+  AIC        = c(AIC_linear, AIC_poly3_mon, AIC_dau, AIC_logist),
+  AICc       = c(AICc_linear, AICc_poly3_mon, AICc_dau, AICc_logist),
+  PCC        = c(pcc_linear, pcc_poly3_mon, pcc_dau, pcc_logist),
+  KendallTau = c(ktau, ktau, ktau, ktau)
+  )
+  
+  print(results)
+  
+  # Create a grid
+  x_min <- min(dataset_grouped[[col_name_string]])
+  x_max <- max(dataset_grouped[[col_name_string]])
+  x_seq <- seq(x_min, x_max, length.out = 200)
+  
+  # Build pred_df with a column name of col_name_string
+  pred_df <- tibble(!!col_name_string := x_seq)
+  
+  # Predict
+  pred_df <- pred_df %>%
+    mutate(
+      linear_fit  = predict(linear_fit,  newdata = pred_df),
+      poly3_mon_fit   = predict(poly3_mon_fit,   newdata = pred_df),
+      dau_fit     = predict(dau_fit,     newdata = pred_df),
+      logist_fit  = predict(logist_fit,  newdata = pred_df),
+            #poly3_fit   = predict(poly3_fit,   newdata = pred_df),
+
+    )
+  
+  # Pivot longer
+  plot_pred_df <- pred_df %>%
+    pivot_longer(
+      cols      = c(linear_fit, poly3_mon_fit,
+                    dau_fit,    logist_fit),
+      names_to  = "model",
+      values_to = "fitted"
+    )
+  
+  ggplot() +
+    geom_point(
+      data  = dataset_grouped,
+      aes(x = .data[[col_name_string]], y = avg_wcr),
+      color = "blue", size = 2
+    ) +
+    geom_line(
+      data = plot_pred_df,
+      aes(x = .data[[col_name_string]], y = fitted, color = model),
+      size = 1
+    ) +
+    scale_y_continuous(
+      name   = "WCR (%)",
+      labels = function(x) x * 100
+    ) +
+    geom_label() +
+    scale_color_manual(
+      name = "Model Fit",
+      values = c(
+        "linear_fit" = "yellow",
+        "poly3_mon_fit"  = "red",
+        "dau_fit"    = "brown",
+        "logist_fit" = "purple"
+        #"poly3_fit" = "black"
+      ),
+      labels = c(
+        "linear_fit" = paste0("Linear (AICc=",  round(AICc_linear, 2), ")", "(PCC=", round(pcc_linear, 2), ")"),
+        "poly3_mon_fit"  = paste0("P.1401 third order poly (AICc=", round(AICc_poly3_mon, 2), ")","(PCC=", round(pcc_poly3_mon, 2), ")"),
+        "dau_fit"    = paste0("DAU Taal10 (AICc=", round(AICc_dau, 2), ")","(PCC=", round(pcc_dau, 2), ")"),
+        "logist_fit" = paste0("Logistic (AICc=", round(AICc_logist, 2), ")","(PCC=", round(pcc_logist, 2), ")")
+        #"poly3_fit"  = paste0("P.1401 third order poly (AICc=", round(AICc_poly3, 2), ")","(PCC=", round(pcc_poly3, 2), ")")
+
+      )
+    ) + annotate("label_npc", npcx="right", npcy="bottom", label = paste0(expression(tau)," = ", round(ktau,2)), fill = "lightgray") +
+    labs(
+      title = "Various fits on data grouped by Listening Conditions",
+      x     = "STOI Score",
+      y     = "WCR"
+    ) +
+    theme_minimal() 
+  
+
+}
+
+# Call it like this (note the string):
+data_group_by_snr_gender <- allsstar_data %>%
+  group_by(snr) %>%
+  summarise(
+    avg_wcr = mean(sim_wcr),
+    avg_stoi_score = mean(stoi_score),
+    avg_siib_score_gaussian = mean(siib_score_gaussian_gapped),
+    avg_siib_score = mean(siib_score_gaussian_gapped),
+    avg_miknn_score = mean(MIKNNScore2x),
+    .groups = "drop"
+  ) %>% select(where(~ !any(is.na(.)))) %>% mutate(snr = as.factor(snr))
+
+dantale_conds <- dantale_all %>% group_by(cond, snr) %>% summarise(across(everything(), ~ mean(.x, na.rm = TRUE)), .groups = "drop") %>%
+  select(where(~ !any(is.na(.)))) %>% mutate(snr = as.factor(snr))
+
+dat_all <- bind_rows(dantale_conds, data_group_by_snr_gender)
+
+dat_allsstar <- data_group_by_snr_gender
+
+final_graphs(dat_allsstar, nrow(dat_allsstar), "avg_siib_score_gaussian")
+final_graphs(dat_allsstar, nrow(dat_allsstar), "avg_stoi_score")
+final_graphs(dat_allsstar, nrow(dat_allsstar), "avg_miknn_score")
+
+final_graphs(dat_all, nrow(dat_all), "avg_siib_score_gaussian")
+final_graphs(dat_all, nrow(dat_all), "avg_stoi_score")
+final_graphs(dat_all, nrow(dat_all), "avg_miknn_score")
+
+
+# names(dantale_conds)
+
+final_graphs(dantale_conds, nrow(dantale_conds), "avg_siib_score_gaussian")
+final_graphs(dantale_conds, nrow(dantale_conds), "avg_stoi_score")
+final_graphs(dantale_conds, nrow(dantale_conds), "avg_miknn_score")
+final_graphs(dantale_conds, nrow(dantale_conds), "avg_SNR")
+final_graphs(dantale_conds, nrow(dantale_conds), "avg_SegSNR")
+final_graphs(dantale_conds, nrow(dantale_conds), "avg_LLR")
+final_graphs(dantale_conds, nrow(dantale_conds), "avg_IS")
+final_graphs(dantale_conds, nrow(dantale_conds), "avg_CEP")
+final_graphs(dantale_conds, nrow(dantale_conds), "avg_STOI")
+final_graphs(dantale_conds, nrow(dantale_conds), "avg_ESTOI")
+
+
+
+
+```
+
+
+```{r allsstar-siib}
+library(tidyverse)
+library(MonoPoly)
+library(minpack.lm)
+library(LaplacesDemon)
+
+final_graphs_raw <- function(dataset_grouped, n, col_name_string) {
+  
+  # Build a formula from the string, e.g. "avg_siib_gaussian"
+  my_formula <- as.formula(paste("sim_wcr ~", col_name_string))
+  
+  # Fit models using that formula
+  linear_fit <- lm(data = dataset_grouped, formula = my_formula)
+  poly3_fit  <- monpol(my_formula, data = dataset_grouped, degree = 3)
+  dau_fit    <- nlsLM(
+    as.formula(paste("sim_wcr ~ dau_taal10(", col_name_string, ", a, b, c)")),
+    data  = dataset_grouped,
+    start = c(a = 0, b = 1, c = 0.5)
+  )
+  logist_fit <- nls(
+    as.formula(paste("sim_wcr ~ logistic_taal10(", col_name_string, ", a, b)")),
+    data  = dataset_grouped,
+    start = c(a = 0, b = 0.5)
+  )
+  
+   # Compute RMSE (Root Mean Squared Error)
+  rmse_linear <- sqrt(mean((dataset_grouped$sim_wcr -
+                            predict(linear_fit, newdata = dataset_grouped))^2))
+  rmse_poly3  <- sqrt(mean((dataset_grouped$sim_wcr -
+                            predict(poly3_fit, newdata = dataset_grouped))^2))
+  rmse_dau    <- sqrt(mean((dataset_grouped$sim_wcr -
+                            predict(dau_fit, newdata = dataset_grouped))^2))
+  rmse_logist <- sqrt(mean((dataset_grouped$sim_wcr -
+                            predict(logist_fit, newdata = dataset_grouped))^2))
+  
+  AIC_linear <- AIC(linear_fit)
+  AIC_poly3 <- AIC(poly3_fit)
+  AIC_dau <- AIC(dau_fit)
+  AIC_logist <- AIC(logist_fit)
+  
+
+  # Compute AICc
+  AICc_linear <- AICc(linear_fit,  n = n, k = length(coef(linear_fit)))
+  AICc_poly3  <- AICc(poly3_fit,   n = n, k = length(coef(poly3_fit)))
+  AICc_dau    <- AICc(dau_fit,     n = n, k = length(coef(dau_fit)))
+  AICc_logist <- AICc(logist_fit,  n = n, k = length(coef(logist_fit)))
+  
+  # Compute PCC
+   pcc_linear  <- cor(dataset_grouped$sim_wcr,
+                     predict(linear_fit, newdata = dataset_grouped))
+  
+  pcc_poly3   <- cor(dataset_grouped$sim_wcr,
+                     predict(poly3_fit, newdata = dataset_grouped))
+  
+  pcc_dau     <- cor(dataset_grouped$sim_wcr,
+                     predict(dau_fit, newdata = dataset_grouped))
+  
+  pcc_logist  <- cor(dataset_grouped$sim_wcr,
+                     predict(logist_fit, newdata = dataset_grouped))
+  
+  # Compute Kendall's Tau
+  ktau  <- cor(
+    dataset_grouped$sim_wcr,
+    predict(linear_fit, newdata = dataset_grouped),
+    method = "kendall"
+  )
+  
+  
+  results <- data.frame(
+  Model      = c("Linear", "Poly3", "Dau", "Logistic"),
+  RMSE =      c(rmse_linear, rmse_poly3, rmse_dau, rmse_logist),
+  AIC        = c(AIC_linear, AIC_poly3, AIC_dau, AIC_logist),
+  AICc       = c(AICc_linear, AICc_poly3, AICc_dau, AICc_logist),
+  PCC        = c(pcc_linear, pcc_poly3, pcc_dau, pcc_logist),
+  KendallTau = c(ktau, ktau, ktau, ktau)
+  )
+  
+  print(results)
+  
+  # Create a grid
+  x_min <- min(dataset_grouped[[col_name_string]])
+  x_max <- max(dataset_grouped[[col_name_string]])
+  x_seq <- seq(x_min, x_max, length.out = 200)
+  
+  # Build pred_df with a column name of col_name_string
+  pred_df <- tibble(!!col_name_string := x_seq)
+  
+  # Predict
+  pred_df <- pred_df %>%
+    mutate(
+      linear_fit  = predict(linear_fit,  newdata = pred_df),
+      poly3_fit   = predict(poly3_fit,   newdata = pred_df),
+      dau_fit     = predict(dau_fit,     newdata = pred_df),
+      logist_fit  = predict(logist_fit,  newdata = pred_df)
+    )
+  
+  # Pivot longer
+  plot_pred_df <- pred_df %>%
+    pivot_longer(
+      cols      = c(linear_fit, poly3_fit,
+                    dau_fit,    logist_fit),
+      names_to  = "model",
+      values_to = "fitted"
+    )
+  
+  ggplot() +
+    geom_point(
+      data  = dataset_grouped,
+      aes(x = .data[[col_name_string]], y = sim_wcr),
+      color = "blue", size = 2
+    ) +
+    geom_line(
+      data = plot_pred_df,
+      aes(x = .data[[col_name_string]], y = fitted, color = model),
+      size = 1
+    ) +
+    scale_y_continuous(
+      name   = "WCR (%)",
+      labels = function(x) x * 100
+    ) +
+    geom_label() +
+    scale_color_manual(
+      name = "Model Fit",
+      values = c(
+        "linear_fit" = "yellow",
+        "poly3_fit"  = "red",
+        "dau_fit"    = "brown",
+        "logist_fit" = "purple"
+      ),
+      labels = c(
+        "linear_fit" = paste0("Linear (AICc=",  round(AICc_linear, 2), ")", "(PCC=", round(pcc_linear, 2), ")"),
+        "poly3_fit"  = paste0("P.1401 third order poly (AICc=", round(AICc_poly3, 2), ")","(PCC=", round(pcc_poly3, 2), ")"),
+        "dau_fit"    = paste0("DAU Taal10 (AICc=", round(AICc_dau, 2), ")","(PCC=", round(pcc_dau, 2), ")"),
+        "logist_fit" = paste0("Logistic (AICc=", round(AICc_logist, 2), ")","(PCC=", round(pcc_logist, 2), ")")
+      )
+    ) + annotate("label_npc", npcx="right", npcy="bottom", label = paste0(expression(tau)," = ", round(ktau,2)), fill = "lightgray") +
+    labs(
+      title = "Various fits on data grouped by Listening Conditions",
+      x     = "MIKNN Score",
+      y     = "WCR"
+    ) +
+    theme_minimal() 
+  
+
+}
+
+# Call it like this (note the string):
+data_group_by_snr_gender <- allsstar_data %>%
+  group_by(snr) %>%
+  summarise(
+    avg_wcr = mean(sim_wcr),
+    avg_stoi_score = mean(stoi_score),
+    avg_siib_score_gaussian = mean(siib_score_gaussian_gapped),
+    avg_siib_score = mean(siib_score_gaussian_gapped),
+    avg_miknn_score = mean(MIKNNScore2x),
+    .groups = "drop"
+  ) %>% select(where(~ !any(is.na(.)))) %>% mutate(snr = as.factor(snr))
+
+dantale_conds <- dantale_all %>% group_by(cond, snr) %>% summarise(across(everything(), ~ mean(.x, na.rm = TRUE)), .groups = "drop") %>%
+  select(where(~ !any(is.na(.)))) %>% mutate(snr = as.factor(snr))
+
+dat_all <- bind_rows(dantale_conds, data_group_by_snr_gender)
+
+dat_allsstar <- data_group_by_snr_gender
+
+final_graphs_raw(allsstar_data, nrow(all_data), "siib_score_gaussian")
+final_graphs_raw(dat_allsstar, nrow(dat_allsstar), "avg_stoi_score")
+final_graphs_raw(dat_allsstar, nrow(dat_allsstar), "avg_miknn_score")
+
+final_graphs_raw(dat_all, nrow(dat_all), "avg_siib_score_gaussian")
+final_graphs_raw(dat_all, nrow(dat_all), "avg_stoi_score")
+final_graphs_raw(dat_all, nrow(dat_all), "avg_miknn_score")
+
+
+# names(dantale_conds)
+
+final_graphs_raw(dantale_conds, nrow(dantale_conds), "avg_siib_score_gaussian")
+final_graphs_raw(dantale_conds, nrow(dantale_conds), "avg_stoi_score")
+final_graphs_raw(dantale_conds, nrow(dantale_conds), "avg_miknn_score")
+final_graphs_raw(dantale_conds, nrow(dantale_conds), "avg_SNR")
+final_graphs_raw(dantale_conds, nrow(dantale_conds), "avg_SegSNR")
+final_graphs_raw(dantale_conds, nrow(dantale_conds), "avg_LLR")
+final_graphs_raw(dantale_conds, nrow(dantale_conds), "avg_IS")
+final_graphs_raw(dantale_conds, nrow(dantale_conds), "avg_CEP")
+final_graphs_raw(dantale_conds, nrow(dantale_conds), "avg_STOI")
+final_graphs_raw(dantale_conds, nrow(dantale_conds), "avg_ESTOI")
+
+
+
+
+```
+
+```{r}
+ 
+dantale_conds <- dantale_all %>% group_by(cond, snr) %>% summarise(avg_wcr = mean(avg_wcr), avg_stoi = mean(avg_stoi), avg_siib_gaussian = mean(avg_siib_gaussian), .groups = "drop")
+
+
+
+ggplot(dantale_conds, aes(x=avg_stoi, y=avg_wcr, color=snr)) + geom_point()
+ggplot(dantale_conds, aes(x=avg_siib_gaussian, y=avg_wcr, color=snr)) + geom_point()
+
+
+
+# Fit your models as before...# Fit your models as before...drop()
+linear_stoi_fit <- lm(data=dantale_conds, formula=avg_wcr ~ avg_stoi)
+poly3_stoi_fit  <- MonoPoly::monpol(formula = avg_wcr ~ avg_stoi, data= dantale_conds, degree = 3)
+dau_stoi_fit    <- nlsLM(avg_wcr ~ dau_taal10(avg_stoi, a, b, c),
+                          data = dantale_conds,
+                          start=c(a=0,b=1,c=0.5))
+logist_stoi_fit <- nls(avg_wcr ~ logistic_taal10(avg_stoi, a, b),
+                        data = dantale_conds,
+                        start=c(a=0,b=0.5))
+
+# Collect predicted values
+dantale_conds <- dantale_conds %>%
+  mutate(
+    poly3_stoi_fit   = predict(poly3_stoi_fit, newdata = dantale_conds),
+    dau_stoi_fit     = predict(dau_stoi_fit,   newdata = dantale_conds),
+    linear_stoi_fit  = predict(linear_stoi_fit,newdata = dantale_conds),
+    logist_stoi_fit  = predict(logist_stoi_fit,newdata = dantale_conds)
+  )
+
+# Compute AICc for each model (or BIC if you prefer):
+AICc_linear <- AICc(linear_stoi_fit,  n=16, k=2)
+AICc_poly3  <- AICc(poly3_stoi_fit,   n=16, k=4)
+AICc_dau    <- AICc(dau_stoi_fit,     n=16, k=3)
+AICc_logist <- AICc(logist_stoi_fit,  n=16, k=length(coef(logist_stoi_fit)))
+
+# Reshape to long format for easier ggplot usage
+plot_data <- dantale_conds %>%
+  select(avg_stoi, avg_wcr,
+         poly3_stoi_fit,
+         dau_stoi_fit,
+         linear_stoi_fit,
+         logist_stoi_fit) %>%
+  pivot_longer(
+    cols = c(poly3_stoi_fit, dau_stoi_fit, linear_stoi_fit, logist_stoi_fit),
+    names_to = "model",
+    values_to = "fitted"
+  )
+
+# Now plot with a single geom_line, colored by model
+ggplot(plot_data, aes(x = avg_stoi, y = avg_wcr)) +
+  geom_point(color="blue", size = 2) +
+  geom_line(aes(y = fitted, color = model), size = 1) +
+    scale_y_continuous(
+    name   = "Average WCR (%)",
+    labels = function(x) x * 100
+  ) +
+  # Put the AICc values (or BIC) into the legend labels:
+  scale_color_manual(
+    name = "Model Fit",
+    values = c(
+      "linear_stoi_fit" = "green",
+      "poly3_stoi_fit"  = "red",
+      "dau_stoi_fit"    = "brown",
+      "logist_stoi_fit" = "purple"
+    ),
+    labels = c(
+      "linear_stoi_fit" = paste0("Linear (AICc=", round(AICc_linear, 2), ")"),
+      "poly3_stoi_fit"  = paste0("P.1401 third order poly (AICc=", round(AICc_poly3, 2), ")"),
+      "dau_stoi_fit"    = paste0("DAU Taal10 (AICc=", round(AICc_dau, 2), ")"),
+      "logist_stoi_fit" = paste0("Logistic (AICc=", round(AICc_logist, 2), ")")
+    )
+  ) +
+  labs(
+    title = "Various fits on data grouped by SNR and Gender",
+    x = "Average stoi",
+    y = "Average WCR"
+  ) +
+  theme_minimal()
+
+
+
+```
+
+```{r dantale-siib}
+dantale_conds <- dantale_all %>% group_by(cond, snr) %>% summarise(avg_wcr = mean(avg_wcr), avg_stoi = mean(avg_stoi), avg_siib_gaussian = mean(avg_siib_gaussian), .groups = "drop")
+
+
+
+# Fit your models as before...# Fit your models as before...drop()
+linear_siib_gaussian_fit <- lm(data=dantale_conds, formula=avg_wcr ~ avg_siib_gaussian)
+poly3_siib_gaussian_fit  <- MonoPoly::monpol(formula = avg_wcr ~ avg_siib_gaussian, data= dantale_conds, degree = 3)
+dau_siib_gaussian_fit    <- nlsLM(avg_wcr ~ dau_taal10(avg_siib_gaussian, a, b, c),
+                          data = dantale_conds,
+                          start=c(a=0,b=1,c=0.5))
+logist_siib_gaussian_fit <- nls(avg_wcr ~ logistic_taal10(avg_siib_gaussian, a, b),
+                        data = dantale_conds,
+                        start=c(a=0,b=0.5))
+
+# Collect predicted values
+dantale_conds <- dantale_conds %>%
+  mutate(
+    poly3_siib_gaussian_fit   = predict(poly3_siib_gaussian_fit, newdata = dantale_conds),
+    dau_siib_gaussian_fit     = predict(dau_siib_gaussian_fit,   newdata = dantale_conds),
+    linear_siib_gaussian_fit  = predict(linear_siib_gaussian_fit,newdata = dantale_conds),
+    logist_siib_gaussian_fit  = predict(logist_siib_gaussian_fit,newdata = dantale_conds)
+  )
+
+# Compute AICc for each model (or BIC if you prefer):
+AICc_linear <- AICc(linear_siib_gaussian_fit,  n=16, k=length(coef(linear_siib_gaussian_fit)))
+AICc_poly3  <- AICc(poly3_siib_gaussian_fit,   n=16, k=length(coef(poly3_siib_gaussian_fit)))
+AICc_dau    <- AICc(dau_siib_gaussian_fit,     n=16, k=length(coef(dau_siib_gaussian_fit)))
+AICc_logist <- AICc(logist_siib_gaussian_fit,  n=16, k=length(coef(logist_siib_gaussian_fit)))
+
+# Reshape to long format for easier ggplot usage
+plot_data <- dantale_conds %>%
+  select(avg_siib_gaussian, avg_wcr,
+         poly3_siib_gaussian_fit,
+         dau_siib_gaussian_fit,
+         linear_siib_gaussian_fit,
+         logist_siib_gaussian_fit) %>%
+  pivot_longer(
+    cols = c(poly3_siib_gaussian_fit, dau_siib_gaussian_fit, linear_siib_gaussian_fit, logist_siib_gaussian_fit),
+    names_to = "model",
+    values_to = "fitted"
+  )
+
+# Now plot with a single geom_line, colored by model
+ggplot(plot_data, aes(x = avg_siib_gaussian, y = avg_wcr)) +
+  geom_point(color="blue", size = 2) +
+  geom_line(aes(y = fitted, color = model), size = 1) +
+    scale_y_continuous(
+    name   = "Average WCR (%)",
+    labels = function(x) x * 100
+  ) +
+  # Put the AICc values (or BIC) into the legend labels:
+  scale_color_manual(
+    name = "Model Fit",
+    values = c(
+      "linear_siib_gaussian_fit" = "green",
+      "poly3_siib_gaussian_fit"  = "red",
+      "dau_siib_gaussian_fit"    = "brown",
+      "logist_siib_gaussian_fit" = "purple"
+    ),
+    labels = c(
+      "linear_siib_gaussian_fit" = paste0("Linear (AICc=", round(AICc_linear, 2), ")"),
+      "poly3_siib_gaussian_fit"  = paste0("P.1401 third order poly (AICc=", round(AICc_poly3, 2), ")"),
+      "dau_siib_gaussian_fit"    = paste0("DAU Taal10 (AICc=", round(AICc_dau, 2), ")"),
+      "logist_siib_gaussian_fit" = paste0("Logistic (AICc=", round(AICc_logist, 2), ")")
+    )
+  ) +
+  labs(
+    title = "Various fits on data grouped by SNR and Gender",
+    x = "Average siib_gaussian",
+    y = "Average WCR"
+  ) +
+  theme_minimal()
+
+
+
+ggplot(dantale_conds, aes(x=avg_stoi, y=avg_wcr, color=snr)) + geom_point()
+ggplot(dantale_conds, aes(x=avg_siib_gaussian, y=avg_wcr, color=snr)) + geom_point()
+
 
 ```
