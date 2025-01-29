@@ -54,8 +54,20 @@ richards_start <- c(
   
 )
 
+gomp <- function(d, a, b, c) {
+  a * exp(-1 * b * exp(-1 * c * d))
+}
+
 logistic_taal10 <- function(d, a, b) {
   1 / (1 + exp(a * d + b))
+}
+
+logistic_gen <- function(d, a, b, c) {
+  (1 - c) / (1 + exp(a * d + b))
+}
+
+logistic_gen2 <- function(d, a, b, c, h) {
+  h + ( (1 - c) / (1 + exp(a * d + b)) )
 }
 
 dau_taal10 <- function(d, a, b, c) {
@@ -129,9 +141,10 @@ dantale_conditions <- read_csv("data/dantale_conditions.csv")
 dantale_trials <- read_csv("data/dantale_trials.csv")
 dantale_oim <- read_csv("data/dantale_results.csv")
 dantale_other <- read_csv("data/dantale_results_other.csv")
-dantale_miknn <- read_csv("data/dantale_results_miknn.csv")
+dantale_miknn <- read_csv("data/dantale_results_miknn_2.csv")
 dantale_oim <- dantale_oim %>% merge(dantale_other) %>% merge(dantale_miknn)
 dantale_all <- prepare_dantale(dantale_data,dantale_conditions, dantale_trials, dantale_oim) 
+
 
 ```
 
@@ -142,6 +155,8 @@ allsstar_data <- prepare_allsstar(metadata_csv_loc = "data/l1res.csv",
                  siib_scores_loc="data/siib_scores.csv",
                  siib_scores_gaussian_loc="data/siib_scores_gaussian.csv",
                  siib_scores_gaussian_gapped_loc="data/siib_scores_gaussian_gapped.csv")
+
+all_data <- dantale_all %>% merge(allsstar_data)
 ```
 
 ```{r}
@@ -600,15 +615,39 @@ library(MonoPoly)
 library(minpack.lm)
 library(LaplacesDemon)
 
+final_graphs_arb <- function(dataset_grouped, col_name_string, formula) {
+  
+  fit <- nls(
+    formula, 
+    data = dataset_grouped, 
+    start = c(b=1, c=-0.01)
+  )
+  
+  rmse <- sqrt(mean((dataset_grouped$avg_wcr -
+                            predict(fit, newdata = dataset_grouped))^2))
+  
+  aic <- 
+  
+}
+
 final_graphs <- function(dataset_grouped, n, col_name_string) {
   
   # Build a formula from the string, e.g. "avg_siib_gaussian"
   my_formula <- as.formula(paste("avg_wcr ~", col_name_string))
   my_poly3_formula <- as.formula(paste("avg_wcr ~ poly(", col_name_string, ", 3, raw=TRUE)"))
+  my_poly2_formula <- as.formula(paste("avg_wcr ~ poly(", col_name_string, ", 5, raw=TRUE)"))
+    print(1)
+
+  my_gomp_formula <- as.formula(paste("avg_wcr ~ gomp(", col_name_string,", 1, b, c)"))
+    print(1)
+
   # Fit models using that formula
   linear_fit <- lm(data = dataset_grouped, formula = my_formula)
+  print(1)
   
   poly3_mon_fit  <- monpol(my_formula, data = dataset_grouped, degree = 3)
+  poly2_mon_fit  <- monpol(my_formula, data = dataset_grouped, degree = 5)
+  print(1)
   
   dau_fit    <- nlsLM(
     as.formula(paste("avg_wcr ~ dau_taal10(", col_name_string, ", a, b, c)")),
@@ -620,6 +659,14 @@ final_graphs <- function(dataset_grouped, n, col_name_string) {
     data  = dataset_grouped,
     start = c(a = 0, b = 0.5)
   )
+  print(gomp(dataset_grouped %>% pull(col_name_string), 1, 1, -0.01))
+  gomp_fit <- nls(
+    my_gomp_formula, 
+    data = dataset_grouped, 
+    start = c(b=1, c=-0.01)
+  )
+
+  
   
   print(1)
   poly3_fit <- lm(my_poly3_formula, data = dataset_grouped)  
@@ -635,12 +682,15 @@ final_graphs <- function(dataset_grouped, n, col_name_string) {
                             predict(dau_fit, newdata = dataset_grouped))^2))
   rmse_logist <- sqrt(mean((dataset_grouped$avg_wcr -
                             predict(logist_fit, newdata = dataset_grouped))^2))
+    rmse_gomp <- sqrt(mean((dataset_grouped$avg_wcr -
+                            predict(gomp_fit, newdata = dataset_grouped))^2))
   
   AIC_linear <- AIC(linear_fit)
   AIC_poly3_mon <- AIC(poly3_mon_fit)
   AIC_dau <- AIC(dau_fit)
   AIC_logist <- AIC(logist_fit)
   AIC_poly3 <- AIC(poly3_fit)
+  AIC_gomp <- AIC(gomp_fit)
 
 
   # Compute AICc
@@ -649,14 +699,15 @@ final_graphs <- function(dataset_grouped, n, col_name_string) {
   AICc_poly3  <- AICc(poly3_fit,   n = n, k = length(coef(poly3_fit)))
   AICc_dau    <- AICc(dau_fit,     n = n, k = length(coef(dau_fit)))
   AICc_logist <- AICc(logist_fit,  n = n, k = length(coef(logist_fit)))
-  
-  min_AICc <- min(c(AICc_linear, AICc_logist, AICc_poly3_mon, AICc_dau))
+  AICc_gomp <- AICc(gomp_fit, n = n, k = length(coef(gomp_fit)))
+
+  min_AICc <- min(c(AICc_linear, AICc_logist, AICc_poly3_mon, AICc_dau, AICc_gomp))
     
   # Create a tibble with labeled columns
   AICc_df <- tibble(
-    Model = c("Linear", "poly3_mon", "Dau", "Logistic"),
-    AICc = c(AICc_linear, AICc_poly3_mon, AICc_dau, AICc_logist),
-    d_AICc = c(AICc_linear, AICc_poly3_mon, AICc_dau, AICc_logist) - min_AICc
+    Model = c("Linear", "poly3_mon", "Dau", "Logistic", "Gomp"),
+    AICc = c(AICc_linear, AICc_poly3_mon,  AICc_dau, AICc_logist, AICc_gomp),
+    d_AICc = c(AICc_linear, AICc_poly3_mon, AICc_dau, AICc_logist, AICc_gomp) - min_AICc
   ) %>% mutate(d_lik = exp(-d_AICc / 2), d_lik_weigh = d_lik / sum(d_lik))
   print(AICc_df)
 
@@ -667,6 +718,8 @@ final_graphs <- function(dataset_grouped, n, col_name_string) {
   
   pcc_poly3_mon   <- cor(dataset_grouped$avg_wcr,
                      predict(poly3_mon_fit, newdata = dataset_grouped))
+    pcc_poly2_mon   <- cor(dataset_grouped$avg_wcr,
+                     predict(poly2_mon_fit, newdata = dataset_grouped))
    pcc_poly3   <- cor(dataset_grouped$avg_wcr,
                      predict(poly3_fit, newdata = dataset_grouped)) 
   pcc_dau     <- cor(dataset_grouped$avg_wcr,
@@ -674,6 +727,8 @@ final_graphs <- function(dataset_grouped, n, col_name_string) {
   
   pcc_logist  <- cor(dataset_grouped$avg_wcr,
                      predict(logist_fit, newdata = dataset_grouped))
+    pcc_gomp  <- cor(dataset_grouped$avg_wcr,
+                     predict(gomp_fit, newdata = dataset_grouped))
   
   # Compute Kendall's Tau
   ktau  <- cor(
@@ -684,12 +739,12 @@ final_graphs <- function(dataset_grouped, n, col_name_string) {
   
   
   results <- data.frame(
-  Model      = c("Linear", "poly3_mon", "Dau", "Logistic"),
-  RMSE =      c(rmse_linear, rmse_poly3_mon, rmse_dau, rmse_logist),
-  AIC        = c(AIC_linear, AIC_poly3_mon, AIC_dau, AIC_logist),
-  AICc       = c(AICc_linear, AICc_poly3_mon, AICc_dau, AICc_logist),
-  PCC        = c(pcc_linear, pcc_poly3_mon, pcc_dau, pcc_logist),
-  KendallTau = c(ktau, ktau, ktau, ktau)
+  Model      = c("Linear", "poly3_mon", "Dau", "Logistic", "Gompertz"),
+  RMSE =      c(rmse_linear, rmse_poly3_mon, rmse_dau, rmse_logist, rmse_gomp),
+  AIC        = c(AIC_linear, AIC_poly3_mon, AIC_dau, AIC_logist, AIC_gomp),
+  AICc       = c(AICc_linear, AICc_poly3_mon, AICc_dau, AICc_logist, AICc_gomp),
+  PCC        = c(pcc_linear, pcc_poly3_mon, pcc_dau, pcc_logist, pcc_gomp),
+  KendallTau = c(ktau, ktau, ktau, ktau, ktau)
   )
   
   print(results)
@@ -709,6 +764,7 @@ final_graphs <- function(dataset_grouped, n, col_name_string) {
       poly3_mon_fit   = predict(poly3_mon_fit,   newdata = pred_df),
       dau_fit     = predict(dau_fit,     newdata = pred_df),
       logist_fit  = predict(logist_fit,  newdata = pred_df),
+      gomp_fit = predict(gomp_fit, newdata = pred_df)
             #poly3_fit   = predict(poly3_fit,   newdata = pred_df),
 
     )
@@ -716,8 +772,8 @@ final_graphs <- function(dataset_grouped, n, col_name_string) {
   # Pivot longer
   plot_pred_df <- pred_df %>%
     pivot_longer(
-      cols      = c(linear_fit, poly3_mon_fit,
-                    dau_fit,    logist_fit),
+      cols      = c(linear_fit, poly3_mon_fit,,
+                    dau_fit,    logist_fit, gomp_fit),
       names_to  = "model",
       values_to = "fitted"
     )
@@ -743,15 +799,18 @@ final_graphs <- function(dataset_grouped, n, col_name_string) {
       values = c(
         "linear_fit" = "yellow",
         "poly3_mon_fit"  = "red",
+        "poly2_mon_fit"  = "blue",
         "dau_fit"    = "brown",
-        "logist_fit" = "purple"
+        "logist_fit" = "purple",
+        "gomp_fit" = "pink"
         #"poly3_fit" = "black"
       ),
       labels = c(
         "linear_fit" = paste0("Linear (AICc=",  round(AICc_linear, 2), ")", "(PCC=", round(pcc_linear, 2), ")"),
         "poly3_mon_fit"  = paste0("P.1401 third order poly (AICc=", round(AICc_poly3_mon, 2), ")","(PCC=", round(pcc_poly3_mon, 2), ")"),
         "dau_fit"    = paste0("DAU Taal10 (AICc=", round(AICc_dau, 2), ")","(PCC=", round(pcc_dau, 2), ")"),
-        "logist_fit" = paste0("Logistic (AICc=", round(AICc_logist, 2), ")","(PCC=", round(pcc_logist, 2), ")")
+        "logist_fit" = paste0("Logistic (AICc=", round(AICc_logist, 2), ")","(PCC=", round(pcc_logist, 2), ")"),
+        "gompertz_fit" = paste0("Gompertz (AICc=", round(AICc_gomp, 2), ")","(PCC=", round(pcc_gomp, 2), ")")
         #"poly3_fit"  = paste0("P.1401 third order poly (AICc=", round(AICc_poly3, 2), ")","(PCC=", round(pcc_poly3, 2), ")")
 
       )
@@ -1167,6 +1226,247 @@ ggplot(plot_data, aes(x = avg_siib_gaussian, y = avg_wcr)) +
 
 ggplot(dantale_conds, aes(x=avg_stoi, y=avg_wcr, color=snr)) + geom_point()
 ggplot(dantale_conds, aes(x=avg_siib_gaussian, y=avg_wcr, color=snr)) + geom_point()
+
+
+```
+
+# GPT again
+```{r gpt-finalgraph}
+
+model_specs <- list(
+  linear = list(
+    method       = "lm",
+    formula_expr = quote(y ~ x)  # 'quote()' so we can substitute later
+  ),
+  monpoly3 = list(
+    method       = "monpol",
+    formula_expr = quote(y ~ x),
+    degree       = 3
+  ),
+  logistic = list(
+    method       = "nls",
+    formula_expr = quote(y ~ logistic_taal10(x, a, b)),
+    start        = c(a = 0, b = 0.5)
+  ),
+  gompertz = list(
+    method       = "nls",
+    formula_expr = quote(y ~ gomp(x, 1, b, c)),
+    start        = c(b=1, c=-0.01)
+  )
+  
+)
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(MonoPoly)       # for monpol()
+library(minpack.lm)     # for nlsLM if you want it
+library(LaplacesDemon)  # for AICc()
+library(cv)
+
+fit_many_models <- function(data, x_col, y_col, model_list, n = nrow(data)) {
+  # data: your data frame
+  # x_col, y_col: strings for the x and y columns in `data`
+  # model_list: the named list of model specs
+  # n: number of data points (used in AICc)
+  
+  # We’ll store:
+  # 1) A data frame of model performance metrics
+  # 2) A data frame of predictions (in "long" format for ggplot)
+  
+  # 1. Prepare an empty container for each model’s summary
+  model_summaries <- list()
+  
+  # 2. Prepare a container for predicted curves
+  #    We'll build it as we go, or initialize after we have predictions.
+  
+  # Build a formula-friendly expression from user’s x_col, y_col
+  # We'll do something like:  y_col ~ x_col  inside each specification
+  # but the user might specify something more advanced (poly, etc.)
+  # So we’ll do it via substituting x->(x_col) and y->(y_col) in the quoted expression.
+  
+  # This function: Substitutes the symbol 'x' with x_col, 'y' with y_col, etc.
+  make_formula <- function(expr, x_sym, y_sym) {
+    # e.g., expr = quote(y ~ log(x)), x_sym=as.symbol("avg_stoi_score"), etc.
+    # Then we evaluate it into an actual formula object.
+    call_mod <- eval(substitute(
+      substitute(EXPR, list(x = x_sym, y = y_sym)), 
+      list(EXPR = expr)
+    ))
+    # call_mod is now something like `y_col ~ log(x_col)` as a call
+    # Turn it into a formula
+    as.formula(call_mod)
+  }
+  
+  # 3. We will define a grid of x-values for plotting predictions
+  x_vals <- seq(min(data[[x_col]], na.rm = TRUE),
+                max(data[[x_col]], na.rm = TRUE),
+                length.out = 200)
+  
+  # Build a “prediction data frame” with the same column name as `x_col`
+  pred_df <- data.frame(x_vals)
+  names(pred_df) <- x_col
+  
+  # We’ll build up columns in pred_df for each model’s predicted Y.
+  
+  for (model_name in names(model_list)) {
+    spec <- model_list[[model_name]]
+  
+    
+    # We expect:
+    #   spec$method in c("lm","nls","nlsLM","monpol", etc.)
+    #   spec$formula_expr is a quoted expression like y ~ x, y ~ logistic_taal10(x,a,b), etc.
+    #   Maybe spec$degree for monpol
+    #   Maybe spec$start for nls
+    
+    # 1. Construct the formula from spec$formula_expr
+    fmla <- make_formula(spec$formula_expr,
+                         x_sym = as.symbol(x_col),
+                         y_sym = as.symbol(y_col))
+    
+    # 2. Fit the model
+    fit_obj <- NULL
+    if (spec$method == "lm") {
+      fit_obj <- lm(fmla, data = data)
+    } else if (spec$method == "monpol") {
+      # monpol uses "fmla", "degree", and possibly other arguments
+      fit_obj <- monpol(fmla, data = data, degree = spec$degree)
+    } else if (spec$method == "nls") {
+      fit_obj <- nls(fmla, data = data, start = spec$start)
+    } else if (spec$method == "nlsLM") {
+      fit_obj <- nlsLM(fmla, data = data, start = spec$start)
+    } else {
+      stop("Unsupported fitting method: ", spec$method)
+    }
+    
+    print(paste("Cv:", spec$method, str(cv(fit_obj, k=2))))
+    fmla <- make_formula(spec$formula_expr,
+                         x_sym = as.symbol(x_col),
+                         y_sym = as.symbol(y_col))
+    print(paste("Coefs:", spec$method, str(coef(fit_obj))))
+    
+    # 3. Compute metrics: RMSE, AIC, AICc, PCC, etc.
+    #    We'll define a small helper for predictions
+    pred_obj <- predict(fit_obj, newdata = data)
+    
+    # monpol returns a data frame with columns x and y
+    # others return a numeric vector
+    if (spec$method == "monpol") {
+      preds <- c(pred_obj)
+      obs <- data[[y_col]]  # monpol returns a data frame
+    } else {
+      preds <- pred_obj
+      obs <- data[[y_col]]
+    } 
+
+    rmse <- sqrt(mean((obs - preds)^2, na.rm = TRUE))
+    aic  <- AIC(fit_obj)
+    
+    # For number of parameters k, we can approximate with length(coef(fit_obj)).
+    k    <- length(coef(fit_obj))
+    aicc <- AICc(fit_obj, n = n, k = k)
+    
+    pcc <- cor(obs, preds, use = "complete.obs")  # Pearson corr
+    # Kendall’s tau (optional)
+    ktau <- cor(obs, preds, method = "kendall", use = "complete.obs")
+    
+    # Collect results
+    model_summaries[[model_name]] <- data.frame(
+      Model       = model_name,
+      Method      = spec$method,
+      RMSE        = rmse,
+      AIC         = aic,
+      AICc        = aicc,
+      PCC         = pcc,
+      KendallTau  = ktau,
+      stringsAsFactors = FALSE
+    )
+    
+    
+    # 4. Add predictions for the *new grid* of x-values
+    pred_colname <- paste0(model_name, "_pred")
+    pred_df[[pred_colname]] <- predict(fit_obj, newdata = pred_df)
+  }
+  
+  # Combine the model summaries
+  summary_df <- do.call(rbind, model_summaries)
+  
+  # We can also compute the minimum AICc and get ΔAICc, etc.
+  min_aicc <- min(summary_df$AICc)
+  summary_df <- summary_df %>%
+    mutate(dAICc = AICc - min_aicc,
+           relLik = exp(-0.5 * dAICc),
+           weight = relLik / sum(relLik))
+  
+  # Now pivot the pred_df from wide to long for plotting
+  # pred_df has columns: x_col, model1_pred, model2_pred, ...
+  long_pred_df <- pred_df %>%
+    tidyr::pivot_longer(
+      cols = -all_of(x_col),
+      names_to = "Model",
+      values_to = "FittedValue"
+    )
+  
+  # Return a list with everything we might want
+  list(
+    summary    = summary_df,
+    predictions = long_pred_df
+  )
+}
+
+# Example usage:
+res <- fit_many_models(
+  data       = dantale_all,
+  x_col      = "avg_miknn_score",
+  y_col      = "avg_wcr",
+  model_list = model_specs,
+  n          = nrow(allsstar_data)
+)
+
+# Check the summary:
+res$summary
+
+#        Model   Method     RMSE      AIC     AICc       PCC KendallTau    dAICc     relLik     weight
+# 1     linear       lm   0.0852  10.1234  10.5811  ...   ...  
+# 2   monpoly3   monpol   0.0821   9.9981  10.2234  ...   ...
+# 3   logistic      nls   0.0760   6.1235   7.0012  ...   ...
+# 4  gompertz      nls    0.0778   7.5233   7.9900  ...   ...
+# etc.
+
+# For plotting:
+long_pred <- res$predictions
+
+
+    data_sum  = allsstar_data %>% group_by(sim_wcr) %>% summarize(stoi_score = mean(stoi_score), snr = mean(snr))
+
+    
+    ##!!!!!
+ggplot() +
+  geom_point(
+    data  = data_sum,
+    aes(x = sim_wcr, y = stoi_score, color = snr)
+  ) 
+
+
+ggplot() +
+  geom_point(
+    data  = data_sum,
+    aes(x = snr, y = sim_wcr, color = stoi_score)
+  ) 
+
+
+
+  geom_line(
+    data = long_pred,
+    aes_string(x = "avg_stoi_score", y = "FittedValue", color = "Model"),
+    linewidth = 1
+  ) +
+  labs(
+    x = "STOI Score",
+    y = "WCR (%)",
+    color = "Model"
+  ) +
+  theme_minimal()
 
 
 ```
